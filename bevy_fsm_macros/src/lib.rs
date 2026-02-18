@@ -52,12 +52,12 @@ fn to_snake_case(s: &str) -> String {
 ///
 /// # Example (Zero Boilerplate)
 ///
-/// ```rust,ignore
+/// ```
 /// use bevy::prelude::*;
 /// use bevy_enum_event::EnumEvent;
 /// use bevy_fsm::{FSMTransition, FSMState};
 ///
-/// #[derive(Component, EnumEvent, FSMTransition, FSMState, Clone, Copy, Debug)]
+/// #[derive(Component, EnumEvent, FSMTransition, FSMState, Clone, Copy, Debug, PartialEq, Eq)]
 /// enum GameState {
 ///     MainMenu,
 ///     Playing,
@@ -74,13 +74,13 @@ fn to_snake_case(s: &str) -> String {
 ///
 /// If you need custom transition logic, don't derive `FSMTransition`:
 ///
-/// ```rust,ignore
+/// ```
 /// use bevy::prelude::*;
 /// use bevy_enum_event::EnumEvent;
 /// use bevy_fsm::{FSMTransition, FSMState};
 ///
 /// // No FSMTransition derive here!
-/// #[derive(Component, EnumEvent, FSMState, Clone, Copy, Debug)]
+/// #[derive(Component, EnumEvent, FSMState, Clone, Copy, Debug, PartialEq, Eq)]
 /// enum LifeFSM {
 ///     Alive,
 ///     Dying,
@@ -90,9 +90,10 @@ fn to_snake_case(s: &str) -> String {
 /// // Manually implement for custom rules
 /// impl FSMTransition for LifeFSM {
 ///     fn can_transition(from: Self, to: Self) -> bool {
-///         matches!((from, to),
-///             (LifeFSM::Alive, LifeFSM::Dying) |
-///             (LifeFSM::Dying, LifeFSM::Dead)) || from == to
+///         matches!(
+///             (from, to),
+///             (LifeFSM::Alive, LifeFSM::Dying) | (LifeFSM::Dying, LifeFSM::Dead)
+///         ) || from == to
 ///     }
 /// }
 /// ```
@@ -150,7 +151,7 @@ pub fn derive_fsm_transition(input: TokenStream) -> TokenStream {
 ///
 /// # Example (Zero Boilerplate - All Transitions Allowed)
 ///
-/// ```rust,ignore
+/// ```
 /// use bevy::prelude::*;
 /// use bevy_enum_event::EnumEvent;
 /// use bevy_fsm::{FSMTransition, FSMState};
@@ -173,7 +174,7 @@ pub fn derive_fsm_transition(input: TokenStream) -> TokenStream {
 ///
 /// Override the default `FSMTransition` implementation to add custom rules:
 ///
-/// ```rust,ignore
+/// ```
 /// use bevy::prelude::*;
 /// use bevy_enum_event::EnumEvent;
 /// use bevy_fsm::{FSMTransition, FSMState};
@@ -188,9 +189,10 @@ pub fn derive_fsm_transition(input: TokenStream) -> TokenStream {
 /// // Override the default to add custom transition rules
 /// impl FSMTransition for LifeFSM {
 ///     fn can_transition(from: Self, to: Self) -> bool {
-///         matches!((from, to),
-///             (LifeFSM::Alive, LifeFSM::Dying) |
-///             (LifeFSM::Dying, LifeFSM::Dead)) || from == to
+///         matches!(
+///             (from, to),
+///             (LifeFSM::Alive, LifeFSM::Dying) | (LifeFSM::Dying, LifeFSM::Dead)
+///         ) || from == to
 ///     }
 /// }
 ///

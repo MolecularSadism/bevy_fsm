@@ -1,10 +1,10 @@
-//! Basic example demonstrating advanced bevy_fsm features.
+//! Basic example demonstrating advanced `bevy_fsm` features.
 //!
 //! This example shows:
-//! - Custom transition rules via manual FSMTransition implementation
+//! - Custom transition rules via manual `FSMTransition` implementation
 //! - Multiple rapid transitions in a single frame
 //! - Component management during state changes (adding/removing components)
-//! - Using fsm_observer! macro to register observers in the FSM hierarchy
+//! - Using `fsm_observer`! macro to register observers in the FSM hierarchy
 //! - Handling Enter, Exit, and Transition events
 //!
 //! Unlike simple.rs which uses zero boilerplate, this demonstrates custom transition logic
@@ -48,9 +48,7 @@ impl FSMTransition for LifeFSM {
     fn can_transition(from: Self, to: Self) -> bool {
         matches!(
             (from, to),
-            (LifeFSM::Alive, LifeFSM::Dying)
-                | (LifeFSM::Dying, LifeFSM::Alive)
-                | (LifeFSM::Dying, LifeFSM::Dead)
+            (LifeFSM::Alive, LifeFSM::Dying) | (LifeFSM::Dying, LifeFSM::Alive | LifeFSM::Dead)
         ) || from == to
     }
 }
@@ -76,10 +74,11 @@ fn setup(mut commands: Commands) {
         .spawn((TestEntity, LifeFSM::Alive, Name::new("Hero")))
         .id();
 
-    println!("Spawned entity {:?} in Alive state", entity);
+    println!("Spawned entity {entity:?} in Alive state");
 }
 
 /// System to trigger state transitions for demonstration
+#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
 fn trigger_transitions(
     mut commands: Commands,
     query: Query<(Entity, &LifeFSM, &Name), With<TestEntity>>,
@@ -97,7 +96,7 @@ fn trigger_transitions(
         // At ~1 second: Alive -> Dying
         if *elapsed >= 1.0 && !*triggered_10 {
             *triggered_10 = true;
-            println!("\n--- Triggering transition: {} Alive -> Dying ---", name);
+            println!("\n--- Triggering transition: {name} Alive -> Dying ---");
             commands.trigger(StateChangeRequest {
                 entity,
                 next: LifeFSM::Dying,
@@ -107,10 +106,7 @@ fn trigger_transitions(
         // At ~2 seconds: Dying -> Alive (resurrection)
         if *elapsed >= 2.0 && !*triggered_20 && state == LifeFSM::Dying {
             *triggered_20 = true;
-            println!(
-                "\n--- Triggering transition: {} Dying -> Alive (Resurrection!) ---",
-                name
-            );
+            println!("\n--- Triggering transition: {name} Dying -> Alive (Resurrection!) ---");
             commands.trigger(StateChangeRequest {
                 entity,
                 next: LifeFSM::Alive,
@@ -120,7 +116,7 @@ fn trigger_transitions(
         // At ~3 seconds: Alive -> Dying again
         if *elapsed >= 3.0 && !*triggered_30 && state == LifeFSM::Alive {
             *triggered_30 = true;
-            println!("\n--- Triggering transition: {} Alive -> Dying ---", name);
+            println!("\n--- Triggering transition: {name} Alive -> Dying ---");
             commands.trigger(StateChangeRequest {
                 entity,
                 next: LifeFSM::Dying,
@@ -130,7 +126,7 @@ fn trigger_transitions(
         // At ~4 seconds: Dying -> Dead
         if *elapsed >= 4.0 && !*triggered_40 && state == LifeFSM::Dying {
             *triggered_40 = true;
-            println!("\n--- Triggering transition: {} Dying -> Dead ---", name);
+            println!("\n--- Triggering transition: {name} Dying -> Dead ---");
             commands.trigger(StateChangeRequest {
                 entity,
                 next: LifeFSM::Dead,
@@ -147,9 +143,10 @@ fn trigger_transitions(
 }
 
 /// Observer: Fires when entering the Dying state
+#[allow(clippy::needless_pass_by_value)]
 fn on_enter_dying(trigger: On<Enter<life_fsm::Dying>>, mut commands: Commands) {
     let entity = trigger.entity;
-    println!("  [ENTER Dying] Entity {:?} is now dying!", entity);
+    println!("  [ENTER Dying] Entity {entity:?} is now dying!");
 
     // Add a DyingAnimation component when entering Dying state
     commands
@@ -158,44 +155,38 @@ fn on_enter_dying(trigger: On<Enter<life_fsm::Dying>>, mut commands: Commands) {
 }
 
 /// Observer: Fires when exiting the Alive state
+#[allow(clippy::needless_pass_by_value)]
 fn on_exit_alive(trigger: On<Exit<life_fsm::Alive>>, query: Query<&Name>) {
     let entity = trigger.entity;
-    let name = query.get(entity).map(|n| n.as_str()).unwrap_or("Unknown");
-    println!(
-        "  [EXIT Alive] Entity {} ({:?}) is no longer alive!",
-        name, entity
-    );
+    let name = query.get(entity).map(Name::as_str).unwrap_or("Unknown");
+    println!("  [EXIT Alive] Entity {name} ({entity:?}) is no longer alive!");
 }
 
 /// Observer: Fires on Dying -> Dead transition
+#[allow(clippy::needless_pass_by_value)]
 fn on_transition_dying_dead(
     trigger: On<Transition<life_fsm::Dying, life_fsm::Dead>>,
     mut commands: Commands,
     query: Query<&Name>,
 ) {
     let entity = trigger.entity;
-    let name = query.get(entity).map(|n| n.as_str()).unwrap_or("Unknown");
-    println!(
-        "  [TRANSITION Dying -> Dead] {} ({:?}) has died. Removing DyingAnimation...",
-        name, entity
-    );
+    let name = query.get(entity).map(Name::as_str).unwrap_or("Unknown");
+    println!("  [TRANSITION Dying -> Dead] {name} ({entity:?}) has died. Removing DyingAnimation...");
 
     // Remove the DyingAnimation component
     commands.entity(entity).remove::<DyingAnimation>();
 }
 
 /// Observer: Fires on Dying -> Alive transition (resurrection)
+#[allow(clippy::needless_pass_by_value)]
 fn on_transition_dying_alive(
     trigger: On<Transition<life_fsm::Dying, life_fsm::Alive>>,
     mut commands: Commands,
     query: Query<&Name>,
 ) {
     let entity = trigger.entity;
-    let name = query.get(entity).map(|n| n.as_str()).unwrap_or("Unknown");
-    println!(
-        "  [TRANSITION Dying -> Alive] {} ({:?}) has been resurrected!",
-        name, entity
-    );
+    let name = query.get(entity).map(Name::as_str).unwrap_or("Unknown");
+    println!("  [TRANSITION Dying -> Alive] {name} ({entity:?}) has been resurrected!");
 
     // Remove the DyingAnimation component since they're no longer dying
     commands.entity(entity).remove::<DyingAnimation>();

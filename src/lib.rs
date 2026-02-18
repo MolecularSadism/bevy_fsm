@@ -162,7 +162,7 @@ use std::any::TypeId;
 /// Uses the same naming convention as `global_observer!` for consistency.
 ///
 /// # Example
-/// ```no_run
+/// ```
 /// # use bevy::prelude::*;
 /// # use bevy_fsm::{FSMState, FSMTransition, fsm_observer, Enter};
 /// # use bevy_enum_event::EnumEvent;
@@ -716,7 +716,7 @@ where
 /// ```
 ///
 /// For manual registration:
-/// ```no_run
+/// ```
 /// # use bevy::prelude::*;
 /// # use bevy_fsm::{FSMState, FSMTransition, on_fsm_added};
 /// # use bevy_enum_event::EnumEvent;
@@ -741,7 +741,7 @@ pub fn on_fsm_added<S: FSMState>(trigger: On<Add, S>, mut commands: Commands, q_
 /// Observer that applies state change requests.
 ///
 /// For manual registration:
-/// ```no_run
+/// ```
 /// # use bevy::prelude::*;
 /// # use bevy_fsm::{FSMState, FSMTransition, apply_state_request};
 /// # use bevy_enum_event::EnumEvent;
@@ -861,7 +861,7 @@ pub fn apply_state_request<S: FSMState + core::hash::Hash>(
 /// See [`on_fsm_added`] documentation for timing considerations and best practices.
 ///
 /// # Example
-/// ```no_run
+/// ```
 /// # use bevy::prelude::*;
 /// # use bevy_fsm::{FSMState, FSMTransition, FSMPlugin, fsm_observer, Enter};
 /// # use bevy_enum_event::{EnumEvent};
@@ -1037,14 +1037,17 @@ mod tests {
         transitions: Vec<(TestState, TestState)>,
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn on_enter(trigger: On<Enter<TestState>>, mut log: ResMut<EventLog>) {
         log.enters.push(trigger.event().state);
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn on_exit(trigger: On<Exit<TestState>>, mut log: ResMut<EventLog>) {
         log.exits.push(trigger.event().state);
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn on_transition(trigger: On<Transition<TestState, TestState>>, mut log: ResMut<EventLog>) {
         let event = trigger.event();
         log.transitions.push((event.from, event.to));
@@ -1172,6 +1175,7 @@ mod tests {
         assert_eq!(*app.world().get::<TestState>(e).unwrap(), TestState::B);
     }
 
+    #[allow(clippy::too_many_lines, clippy::uninlined_format_args)]
     #[test]
     fn fsm_observer_macro_registers_and_organizes() {
         println!("\n=== TEST START: fsm_observer_macro_registers_and_organizes ===");
@@ -1344,7 +1348,7 @@ mod tests {
             let mut query = app.world_mut().query::<(Entity, &ChildOf, Option<&Name>)>();
             for (entity_id, child_of, name) in query.iter(app.world()) {
                 child_count += 1;
-                let name_str = name.map(|n| n.as_str()).unwrap_or("<no name>");
+                let name_str = name.map_or("<no name>", Name::as_str);
                 println!(
                     "  - Entity {:?}, Name: '{}', Parent: {:?}",
                     entity_id,
@@ -1736,6 +1740,7 @@ mod tests {
         enters: Vec<PluginTestState>,
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn on_plugin_enter(trigger: On<Enter<PluginTestState>>, mut log: ResMut<PluginEventLog>) {
         log.enters.push(trigger.event().state);
     }

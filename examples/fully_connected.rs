@@ -2,12 +2,12 @@
 //!
 //! This demonstrates:
 //! - Zero boilerplate FSM with default "allow all transitions" behavior
-//! - Just three derives: #[derive(EnumEvent, FSMTransition, FSMState)]
-//! - No manual FSMTransition implementation needed
-//! - Using fsm_observer! macro to register observers in the FSM hierarchy
+//! - Just three derives: #[derive(EnumEvent, `FSMTransition`, `FSMState`)]
+//! - No manual `FSMTransition` implementation needed
+//! - Using `fsm_observer`! macro to register observers in the FSM hierarchy
 //! - ALL transitions are allowed (fully connected state graph)
 //!
-//! Run with: cargo run --example fully_connected
+//! Run with: `cargo run --example fully_connected`
 
 use bevy::prelude::*;
 use bevy_fsm::{
@@ -30,7 +30,7 @@ fn main() {
 
 /// Define a simple game state FSM.
 ///
-/// The FSMTransition derive gives us "allow all transitions" by default.
+/// The `FSMTransition` derive gives us "allow all transitions" by default.
 #[derive(
     Component, EnumEvent, FSMTransition, FSMState, Reflect, Clone, Copy, Debug, PartialEq, Eq, Hash,
 )]
@@ -52,6 +52,7 @@ fn setup(mut commands: Commands) {
 }
 
 /// Cycle through states to demonstrate the fully connected FSM
+#[allow(clippy::match_same_arms)]
 fn cycle_states(
     mut commands: Commands,
     query: Query<(Entity, &GameState, &Name)>,
@@ -88,7 +89,7 @@ fn cycle_states(
 
         if let Some(next) = next_state {
             if *frame < 50 {
-                println!("{} transitioning: {:?} -> {:?}", name, state, next);
+                println!("{name} transitioning: {state:?} -> {next:?}");
             }
             commands.trigger(StateChangeRequest { entity, next });
         }

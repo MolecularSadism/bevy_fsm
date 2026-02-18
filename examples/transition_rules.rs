@@ -1,4 +1,4 @@
-//! Transition rules example using the same `GameState` enum as fully_connected.rs.
+//! Transition rules example using the same `GameState` enum as `fully_connected.rs`.
 //!
 //! This demonstrates:
 //! - Custom transition rules via manual `FSMTransition` implementation
@@ -7,10 +7,10 @@
 //! - Using `fsm_observer!` to register enter observers
 //!
 //! Blocked transitions in this example:
-//!   MainMenu -> Paused
-//!   Playing -> MainMenu
-//!   GameOver -> Playing
-//!   GameOver -> Paused
+//!   `MainMenu` -> Paused
+//!   Playing -> `MainMenu`
+//!   `GameOver` -> Playing
+//!   `GameOver` -> Paused
 //!
 //! Run with: `cargo run --example transition_rules`
 
@@ -35,7 +35,7 @@ fn main() {
         .run();
 }
 
-/// Game states shared with the fully_connected example.
+/// Game states shared with the `fully_connected` example.
 #[derive(Component, EnumEvent, FSMState, Reflect, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[reflect(Component)]
 enum GameState {
@@ -52,10 +52,9 @@ impl FSMTransition for GameState {
     fn can_transition(from: Self, to: Self) -> bool {
         if matches!(
             (from, to),
-            (GameState::MainMenu, GameState::Paused)
+            (GameState::MainMenu | GameState::GameOver, GameState::Paused)
                 | (GameState::Playing, GameState::MainMenu)
                 | (GameState::GameOver, GameState::Playing)
-                | (GameState::GameOver, GameState::Paused)
         ) {
             return false;
         }
@@ -73,6 +72,7 @@ fn setup(mut commands: Commands) {
 }
 
 /// Drive a scripted sequence of transition attempts to demonstrate the rules.
+#[allow(clippy::match_same_arms)]
 fn drive_state_transitions(
     mut commands: Commands,
     query: Query<(Entity, &GameState, &Name)>,
@@ -81,14 +81,11 @@ fn drive_state_transitions(
     *frame += 1;
 
     for (entity, &state, name) in &query {
-        println!(
-            "Frame {:02}: {} currently in {:?}",
-            *frame,
-            name.as_str(),
-            state
-        );
+        let frame = *frame;
+        let name = name.as_str();
+        println!("Frame {frame:02}: {name} currently in {state:?}");
 
-        let next = match *frame {
+        let next = match frame {
             1 => Some(GameState::Paused),   // Blocked (MainMenu -> Paused)
             2 => Some(GameState::Playing),  // Allowed (MainMenu -> Playing)
             3 => Some(GameState::MainMenu), // Blocked (Playing -> MainMenu)
@@ -105,7 +102,7 @@ fn drive_state_transitions(
         };
 
         if let Some(target) = next {
-            println!("  Attempting transition: {:?} -> {:?}", state, target);
+            println!("  Attempting transition: {state:?} -> {target:?}");
             let allowed = <GameState as FSMTransition>::can_transition(state, target);
             println!(
                 "  {}xpecting transition",
