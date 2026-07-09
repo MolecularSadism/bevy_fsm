@@ -6,6 +6,7 @@ Observer-driven finite state machine framework for Bevy ECS.
 
 | Bevy | bevy_fsm |
 |------|----------|
+| 0.19 | 0.4      |
 | 0.18 | 0.3      |
 | 0.17 | 0.2      |
 | 0.16 | 0.1      |
