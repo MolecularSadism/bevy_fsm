@@ -2,9 +2,9 @@
 //!
 //! This demonstrates:
 //! - Zero boilerplate FSM with default "allow all transitions" behavior
-//! - Just three derives: #[derive(EnumEvent, FSMTransition, FSMState)]
-//! - No manual FSMTransition implementation needed!
-//! - Using fsm_observer! macro to register observers in the FSM hierarchy
+//! - Just three derives: #[derive(EnumEvent, `FSMTransition`, `FSMState`)]
+//! - No manual `FSMTransition` implementation needed!
+//! - Using `fsm_observer`! macro to register observers in the FSM hierarchy
 //!
 //! Run with: cargo run --example simple
 
@@ -29,7 +29,7 @@ fn main() {
 
 /// Define a simple game state FSM.
 ///
-/// The FSMTransition derive gives us "allow all transitions" by default.
+/// The `FSMTransition` derive gives us "allow all transitions" by default.
 #[derive(
     Component, EnumEvent, FSMTransition, FSMState, Reflect, Clone, Copy, Debug, PartialEq, Eq, Hash,
 )]
@@ -53,6 +53,11 @@ fn setup(mut commands: Commands) {
 }
 
 /// Cycle through states to demonstrate the FSM
+#[allow(
+    clippy::needless_pass_by_value,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
 fn cycle_states(
     mut commands: Commands,
     query: Query<(Entity, &GameState, &Name)>,
@@ -69,9 +74,8 @@ fn cycle_states(
 
         for (entity, &state, name) in query.iter() {
             let next_state = match current_step {
-                2 => Some(GameState::Playing),
+                2 | 6 => Some(GameState::Playing),
                 4 => Some(GameState::Paused),
-                6 => Some(GameState::Playing),
                 8 => Some(GameState::GameOver),
                 10 => Some(GameState::MainMenu), // Can go back to menu from game over!
                 12 => {
@@ -82,7 +86,7 @@ fn cycle_states(
             };
 
             if let Some(next) = next_state {
-                println!("\n{} transitioning: {:?} -> {:?}", name, state, next);
+                println!("\n{name} transitioning: {state:?} -> {next:?}");
                 commands.trigger(StateChangeRequest { entity, next });
             }
         }

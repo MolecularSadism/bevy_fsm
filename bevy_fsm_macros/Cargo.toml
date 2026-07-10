@@ -22,3 +22,5 @@ proc-macro2.workspace = true
 
 [dev-dependencies]
 bevy_enum_event.workspace = true
+bevy_fsm = { path = ".." }
+bevy.workspace = true

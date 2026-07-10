@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-07-09
+
+### Changed
+
+- **BREAKING**: Migrated to Bevy 0.19 (requires Rust 1.95.0)
+
+### Notes
+
+The public API required no source changes: the observer system (`On<Event>`,
+`On<Add, S>`, `add_observer`), `EntityEvent`, `commands.trigger`, the
+`ChildOf`/`add_child` hierarchy, and reflection (`register_type`) all remained
+compatible across the 0.18 → 0.19 upgrade. The 0.19 migration reworked several
+subsystems this crate relies on, so regression tests were added to pin down the
+behaviours that were most at risk:
+
+- `on_fsm_added` (`On<Add, S>`) stays add-only and does not re-fire when a
+  transition re-inserts the state component (guards against the `Replace` →
+  `Discard` "Lifecycle event changes").
+- `apply_state_request` gracefully ignores despawned entities and removed
+  components instead of panicking (guards against "SystemParam validation is
+  now done when fetching the data").
+- Reflection registration and the resource-backed observer hierarchy keep
+  working (guards against "Resources as Components" and the `bevy_reflect`
+  reorganization).
+
 ## [0.3.0] - 2025-01-20
 
 ### Changed

@@ -3,18 +3,18 @@ resolver = "2"
 members = ["bevy_fsm_macros"]
 
 [workspace.package]
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/ffmulks/bevy_fsm"
 authors = ["Dr. Florian Mulks <ffmulks@users.noreply.github.com>"]
 
 [workspace.dependencies]
-bevy = { version = "0.18", default-features = false }
-bevy_enum_event = "0.3"
-syn = { version = "2.0.108", features = ["full", "visit"] }
-quote = "1.0"
-proc-macro2 = "1.0.103"
+bevy = { version = "0.19", default-features = false }
+bevy_enum_event = "0.4"
+syn = { version = "2.0.116", features = ["full", "visit"] }
+quote = "1.0.44"
+proc-macro2 = "1.0.106"
 
 [package]
 name = "bevy_fsm"
@@ -36,4 +36,4 @@ all-features = true
 [dependencies]
 bevy.workspace = true
 bevy_enum_event.workspace = true
-bevy_fsm_macros = { version = "0.3.0", path = "bevy_fsm_macros" }
+bevy_fsm_macros = { version = "0.4.0", path = "bevy_fsm_macros" }
