@@ -1792,4 +1792,185 @@ mod tests {
             "FSMPlugin should fire Enter events for both initial state and transitions"
         );
     }
+
+    // -----------------------------------------------------------------------
+    // Bevy 0.18 -> 0.19 migration regression tests
+    //
+    // Upgrading to Bevy 0.19 required no source changes, but the migration
+    // reworked several subsystems this crate depends on. These tests pin down
+    // the behaviours that were "under suspicion" so a future Bevy bump cannot
+    // silently regress them:
+    //
+    // - "Lifecycle event changes" (`Replace` renamed to `Discard`) and the
+    //   reworked lifecycle observers: `on_fsm_added` listens on the `Add`
+    //   lifecycle event, which must stay *add-only* and never re-fire when a
+    //   transition re-inserts the state component (that is an Insert/Discard,
+    //   not an Add).
+    // - "SystemParam validation is now done when fetching the data":
+    //   `apply_state_request` must still gracefully ignore despawned entities
+    //   and removed components instead of panicking.
+    // - "Resources as Components" + the `bevy_reflect` reorg: the reflection
+    //   registration path (`register_type` / `GetTypeRegistration`) and the
+    //   resource-backed observer hierarchy must keep working.
+    // -----------------------------------------------------------------------
+
+    /// A second reflectable FSM used to verify multiple `FSMPlugin`s share one
+    /// hierarchy root.
+    #[derive(Component, Reflect, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+    #[reflect(Component)]
+    enum SecondFSM {
+        X,
+        Y,
+    }
+
+    impl FSMState for SecondFSM {}
+
+    impl FSMTransition for SecondFSM {
+        fn can_transition(_from: Self, _to: Self) -> bool {
+            true
+        }
+    }
+
+    /// `On<Add, S>` must be *add-only*: re-inserting the same state component
+    /// (exactly what `apply_state_request` does on every transition) must NOT
+    /// re-trigger `on_fsm_added`. Bevy 0.19's "Lifecycle event changes"
+    /// renamed `Replace` to `Discard`; this guards that `Add` still fires only
+    /// on first insertion, so the initial Enter event is never duplicated when
+    /// a transition re-inserts the component.
+    #[test]
+    fn on_fsm_added_is_add_only_not_on_reinsert() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.init_resource::<EventLog>();
+        // Only the add-observer + enter logger; NO apply_state_request, so the
+        // only way `enters` can grow is `on_fsm_added` firing on an `Add`.
+        app.world_mut().add_observer(on_fsm_added::<TestState>);
+        app.world_mut().add_observer(on_enter);
+
+        let e = app.world_mut().spawn(TestState::A).id();
+        app.update();
+        assert_eq!(
+            app.world().resource::<EventLog>().enters,
+            vec![TestState::A],
+            "on_fsm_added should fire exactly one initial Enter on spawn"
+        );
+
+        // Re-insert the component with a different value, exactly like a state
+        // transition does. This is an Insert/Discard, not an Add, so
+        // on_fsm_added must stay silent.
+        app.world_mut().entity_mut(e).insert(TestState::B);
+        app.update();
+        assert_eq!(
+            app.world().resource::<EventLog>().enters,
+            vec![TestState::A],
+            "On<Add> must not re-fire when the state component is re-inserted"
+        );
+    }
+
+    /// `apply_state_request` must not panic when the target entity has been
+    /// despawned. Bevy 0.19 moved system-param validation into the data-fetch
+    /// step; this guards that a request for a stale entity is a graceful no-op.
+    #[test]
+    fn apply_state_request_ignores_despawned_entity() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.world_mut()
+            .add_observer(apply_state_request::<TestState>);
+
+        let e = app.world_mut().spawn(TestState::A).id();
+        app.world_mut().entity_mut(e).despawn();
+
+        app.world_mut()
+            .commands()
+            .trigger(StateChangeRequest::<TestState> {
+                entity: e,
+                next: TestState::B,
+            });
+        app.update(); // must not panic
+
+        assert!(
+            app.world().get_entity(e).is_err(),
+            "despawned entity should stay despawned"
+        );
+    }
+
+    /// `apply_state_request` must not panic when the FSM component was removed
+    /// from an otherwise-live entity, and must leave it without a state.
+    #[test]
+    fn apply_state_request_ignores_removed_component() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.world_mut()
+            .add_observer(apply_state_request::<TestState>);
+
+        let e = app.world_mut().spawn(TestState::A).id();
+        app.world_mut().entity_mut(e).remove::<TestState>();
+
+        app.world_mut()
+            .commands()
+            .trigger(StateChangeRequest::<TestState> {
+                entity: e,
+                next: TestState::B,
+            });
+        app.update(); // must not panic
+
+        assert!(
+            app.world().get::<TestState>(e).is_none(),
+            "request for an entity without the FSM component should be ignored"
+        );
+    }
+
+    /// `FSMPlugin::build` calls `register_type::<S>()`. This verifies the
+    /// reflection registration path still works after the `bevy_reflect`
+    /// reorg / "Resources as Components" changes in 0.19.
+    #[test]
+    fn fsm_plugin_registers_type_for_reflection() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(FSMPlugin::<PluginTestState>::default());
+
+        let registry = app.world().resource::<AppTypeRegistry>().read();
+        assert!(
+            registry.get(TypeId::of::<PluginTestState>()).is_some(),
+            "FSMPlugin should register its state type in the reflection registry"
+        );
+    }
+
+    /// The observer hierarchy is backed by the `FSMObserverHierarchy` resource.
+    /// In 0.19 resources are also components ("Resources as Components"); this
+    /// verifies multiple `FSMPlugin`s still share a single root entity with one
+    /// group per FSM type.
+    #[test]
+    fn multiple_fsm_plugins_share_single_root() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(FSMPlugin::<PluginTestState>::default());
+        app.add_plugins(FSMPlugin::<SecondFSM>::default());
+
+        let mut roots = app
+            .world_mut()
+            .query_filtered::<Entity, With<FSMObserversRoot>>();
+        assert_eq!(
+            roots.iter(app.world()).count(),
+            1,
+            "all FSM plugins should share exactly one FSMObservers root"
+        );
+
+        let mut g1 = app
+            .world_mut()
+            .query_filtered::<Entity, With<FSMObserverGroup<PluginTestState>>>();
+        let mut g2 = app
+            .world_mut()
+            .query_filtered::<Entity, With<FSMObserverGroup<SecondFSM>>>();
+        assert_eq!(
+            g1.iter(app.world()).count(),
+            1,
+            "PluginTestState should have exactly one observer group"
+        );
+        assert_eq!(
+            g2.iter(app.world()).count(),
+            1,
+            "SecondFSM should have exactly one observer group"
+        );
+    }
 }
