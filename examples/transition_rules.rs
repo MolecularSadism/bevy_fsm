@@ -16,7 +16,7 @@
 
 use bevy::prelude::*;
 use bevy_fsm::{
-    fsm_observer, Enter, EnumEvent, FSMPlugin, FSMState, FSMTransition, StateChangeRequest,
+    Enter, EnumEvent, FSMPlugin, FSMState, FSMTransition, StateChangeRequest, fsm_observer,
 };
 
 fn main() {
@@ -66,7 +66,9 @@ impl FSMTransition for GameState {
 /// Spawn an entity in the starting state.
 fn setup(mut commands: Commands) {
     println!("=== Transition Rules Example ===");
-    println!("Blocked transitions: MainMenu -> Paused, Playing -> MainMenu, GameOver -> Playing, GameOver -> Paused\n");
+    println!(
+        "Blocked transitions: MainMenu -> Paused, Playing -> MainMenu, GameOver -> Playing, GameOver -> Paused\n"
+    );
 
     commands.spawn((GameState::MainMenu, Name::new("Game")));
 }

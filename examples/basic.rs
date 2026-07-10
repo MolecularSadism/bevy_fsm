@@ -14,8 +14,8 @@
 
 use bevy::prelude::*;
 use bevy_fsm::{
-    fsm_observer, Enter, EnumEvent, Exit, FSMPlugin, FSMState, FSMTransition, StateChangeRequest,
-    Transition,
+    Enter, EnumEvent, Exit, FSMPlugin, FSMState, FSMTransition, StateChangeRequest, Transition,
+    fsm_observer,
 };
 
 fn main() {
