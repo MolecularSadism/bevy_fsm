@@ -158,7 +158,7 @@ fn on_enter_dying(trigger: On<Enter<life_fsm::Dying>>, mut commands: Commands) {
 #[allow(clippy::needless_pass_by_value)]
 fn on_exit_alive(trigger: On<Exit<life_fsm::Alive>>, query: Query<&Name>) {
     let entity = trigger.entity;
-    let name = query.get(entity).map(Name::as_str).unwrap_or("Unknown");
+    let name = query.get(entity).map_or("Unknown", Name::as_str);
     println!("  [EXIT Alive] Entity {name} ({entity:?}) is no longer alive!");
 }
 
@@ -170,8 +170,10 @@ fn on_transition_dying_dead(
     query: Query<&Name>,
 ) {
     let entity = trigger.entity;
-    let name = query.get(entity).map(Name::as_str).unwrap_or("Unknown");
-    println!("  [TRANSITION Dying -> Dead] {name} ({entity:?}) has died. Removing DyingAnimation...");
+    let name = query.get(entity).map_or("Unknown", Name::as_str);
+    println!(
+        "  [TRANSITION Dying -> Dead] {name} ({entity:?}) has died. Removing DyingAnimation..."
+    );
 
     // Remove the DyingAnimation component
     commands.entity(entity).remove::<DyingAnimation>();
@@ -185,7 +187,7 @@ fn on_transition_dying_alive(
     query: Query<&Name>,
 ) {
     let entity = trigger.entity;
-    let name = query.get(entity).map(Name::as_str).unwrap_or("Unknown");
+    let name = query.get(entity).map_or("Unknown", Name::as_str);
     println!("  [TRANSITION Dying -> Alive] {name} ({entity:?}) has been resurrected!");
 
     // Remove the DyingAnimation component since they're no longer dying

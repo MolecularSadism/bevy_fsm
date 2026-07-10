@@ -1,8 +1,10 @@
 # bevy_fsm
 
 [![CI](https://github.com/MolecularSadism/bevy_fsm/workflows/CI/badge.svg)](https://github.com/MolecularSadism/bevy_fsm/actions)
+[![Crates.io](https://img.shields.io/crates/v/bevy_fsm.svg)](https://crates.io/crates/bevy_fsm)
+[![Docs.rs](https://docs.rs/bevy_fsm/badge.svg)](https://docs.rs/bevy_fsm)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](https://github.com/MolecularSadism/bevy_fsm#license)
-[![Bevy](https://img.shields.io/badge/Bevy-0.18-blue.svg)](https://bevyengine.org/)
+[![Bevy](https://img.shields.io/badge/Bevy-0.19-blue.svg)](https://bevyengine.org/)
 [![Rust](https://img.shields.io/badge/rust-2021%20edition-orange.svg)](https://www.rust-lang.org/)
 
 Observer-driven finite state machine framework for Bevy ECS.
