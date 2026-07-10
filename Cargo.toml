@@ -11,7 +11,7 @@ authors = ["Dr. Florian Mulks <ffmulks@users.noreply.github.com>"]
 
 [workspace.dependencies]
 bevy = { version = "0.19", default-features = false }
-bevy_enum_event = { version = "0.4", git = "https://github.com/MolecularSadism/bevy_enum_event" }
+bevy_enum_event = "0.4"
 syn = { version = "2.0.116", features = ["full", "visit"] }
 quote = "1.0.44"
 proc-macro2 = "1.0.106"
