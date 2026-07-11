@@ -43,7 +43,7 @@ fn to_snake_case(s: &str) -> String {
 ///
 /// # Requirements
 ///
-/// - Can be applied to any enum (doesn't require `EnumEvent` or `FSMState`)
+/// - Can be applied to any enum (doesn't require `FSMState`)
 /// - Depends on `bevy_fsm::FSMTransition` trait
 ///
 /// # Generated Code
@@ -54,10 +54,9 @@ fn to_snake_case(s: &str) -> String {
 ///
 /// ```
 /// use bevy::prelude::*;
-/// use bevy_enum_event::EnumEvent;
 /// use bevy_fsm::{FSMTransition, FSMState};
 ///
-/// #[derive(Component, EnumEvent, FSMTransition, FSMState, Clone, Copy, Debug, PartialEq, Eq)]
+/// #[derive(Component, FSMTransition, FSMState, Clone, Copy, Debug, PartialEq, Eq)]
 /// enum GameState {
 ///     MainMenu,
 ///     Playing,
@@ -76,11 +75,10 @@ fn to_snake_case(s: &str) -> String {
 ///
 /// ```
 /// use bevy::prelude::*;
-/// use bevy_enum_event::EnumEvent;
 /// use bevy_fsm::{FSMTransition, FSMState};
 ///
 /// // No FSMTransition derive here!
-/// #[derive(Component, EnumEvent, FSMState, Clone, Copy, Debug, PartialEq, Eq)]
+/// #[derive(Component, FSMState, Clone, Copy, Debug, PartialEq, Eq)]
 /// enum LifeFSM {
 ///     Alive,
 ///     Dying,
@@ -130,13 +128,12 @@ pub fn derive_fsm_transition(input: TokenStream) -> TokenStream {
 
 /// Derive macro for generating FSM state infrastructure.
 ///
-/// This macro extends `EnumEvent` with finite state machine functionality by implementing
-/// the `FSMState` trait with variant-specific event triggering. It must be used alongside
-/// `#[derive(EnumEvent)]`.
+/// This macro implements the `FSMState` trait with variant-specific event
+/// triggering and generates a `snake_case` module of marker types, one per
+/// variant. It is self-contained - no companion event-deriving macro is needed.
 ///
 /// # Requirements
 ///
-/// - Must be applied to the same enum as `#[derive(EnumEvent)]`
 /// - The enum must only have unit variants (no tuple or named fields)
 /// - Depends on types from `bevy_fsm` crate: `Enter<T>`, `Exit<T>`, `Transition<F, T>`, `FSMState`
 ///
@@ -144,7 +141,11 @@ pub fn derive_fsm_transition(input: TokenStream) -> TokenStream {
 ///
 /// For an enum named `MyFSM`, this generates:
 ///
-/// 1. **`FSMState` implementation** with three methods:
+/// 1. **A `my_fsm` module** containing a zero-sized marker struct for each
+///    variant (e.g. `my_fsm::StateA`). These are used as the type parameters for
+///    `Enter<T>`, `Exit<T>`, and `Transition<F, T>`. They are intentionally not
+///    Bevy events, so a marker can never be triggered on its own and bypass the FSM.
+/// 2. **An `FSMState` implementation** with three methods:
 ///    - `trigger_enter_variant(ec, state)` - Fires `Enter<module::Variant>` events
 ///    - `trigger_exit_variant(ec, state)` - Fires `Exit<module::Variant>` events
 ///    - `trigger_transition_variant(ec, from, to)` - Fires `Transition<module::From, module::To>` events
@@ -153,11 +154,10 @@ pub fn derive_fsm_transition(input: TokenStream) -> TokenStream {
 ///
 /// ```
 /// use bevy::prelude::*;
-/// use bevy_enum_event::EnumEvent;
 /// use bevy_fsm::{FSMTransition, FSMState};
 ///
 /// // Just two derives - no FSMTransition implementation needed!
-/// #[derive(Component, EnumEvent, FSMTransition, FSMState, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// #[derive(Component, FSMTransition, FSMState, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 /// enum GameState {
 ///     MainMenu,
 ///     Playing,
@@ -176,10 +176,9 @@ pub fn derive_fsm_transition(input: TokenStream) -> TokenStream {
 ///
 /// ```
 /// use bevy::prelude::*;
-/// use bevy_enum_event::EnumEvent;
 /// use bevy_fsm::{FSMTransition, FSMState};
 ///
-/// #[derive(Component, EnumEvent, FSMState, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// #[derive(Component, FSMState, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 /// enum LifeFSM {
 ///     Alive,
 ///     Dying,
@@ -230,15 +229,32 @@ pub fn derive_fsm_state(input: TokenStream) -> TokenStream {
 
     let variant_idents: Vec<_> = variants.iter().map(|v| &v.ident).collect();
 
-    // Generate the module name (same as EnumEvent uses)
+    // Generate the snake_case module name that holds the per-variant marker types.
     let module_name_str = to_snake_case(&enum_name.to_string());
     let fsm_module_name = syn::Ident::new(&module_name_str, enum_name.span());
+
+    // Generate a zero-sized marker struct for each variant. These are only ever
+    // used as the type parameter for `Enter<T>`/`Exit<T>`/`Transition<F, T>`, so
+    // they need `Copy + Send + Sync + 'static` and nothing more - deliberately
+    // *not* Bevy events, so a variant marker can never be triggered on its own
+    // and bypass the FSM.
+    let variant_structs: Vec<_> = variant_idents
+        .iter()
+        .map(|variant| {
+            let doc = format!("Marker type for the `{enum_name}::{variant}` state variant.");
+            quote! {
+                #[doc = #doc]
+                #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+                pub struct #variant;
+            }
+        })
+        .collect();
 
     // Generate Enter event triggers for each variant
     let enter_triggers: Vec<_> = variant_idents
         .iter()
         .map(|variant| {
-            let variant_ty = quote! { #fsm_module_name::#variant #ty_generics };
+            let variant_ty = quote! { #fsm_module_name::#variant };
             quote! {
                 #enum_name::#variant => {
                     commands.trigger(bevy_fsm::Enter::<#variant_ty> {
@@ -254,7 +270,7 @@ pub fn derive_fsm_state(input: TokenStream) -> TokenStream {
     let exit_triggers: Vec<_> = variant_idents
         .iter()
         .map(|variant| {
-            let variant_ty = quote! { #fsm_module_name::#variant #ty_generics };
+            let variant_ty = quote! { #fsm_module_name::#variant };
             quote! {
                 #enum_name::#variant => {
                     commands.trigger(bevy_fsm::Exit::<#variant_ty> {
@@ -270,8 +286,8 @@ pub fn derive_fsm_state(input: TokenStream) -> TokenStream {
     let mut transition_triggers = Vec::new();
     for from_variant in &variant_idents {
         for to_variant in &variant_idents {
-            let from_ty = quote! { #fsm_module_name::#from_variant #ty_generics };
-            let to_ty = quote! { #fsm_module_name::#to_variant #ty_generics };
+            let from_ty = quote! { #fsm_module_name::#from_variant };
+            let to_ty = quote! { #fsm_module_name::#to_variant };
             transition_triggers.push(quote! {
                 (#enum_name::#from_variant, #enum_name::#to_variant) => {
                     commands.trigger(bevy_fsm::Transition::<#from_ty, #to_ty> {
@@ -284,7 +300,15 @@ pub fn derive_fsm_state(input: TokenStream) -> TokenStream {
         }
     }
 
+    let module_doc =
+        format!("Generated marker types for each variant of [`{enum_name}`], one per state.");
+
     let expanded = quote! {
+        #[doc = #module_doc]
+        pub mod #fsm_module_name {
+            #(#variant_structs)*
+        }
+
         // Implement the FSMState trait methods
         impl #impl_generics bevy_fsm::FSMState for #enum_name #ty_generics #where_clause {
             /// Triggers variant-specific Enter event.
