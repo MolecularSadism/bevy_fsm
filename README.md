@@ -33,7 +33,6 @@ Observer-driven finite state machine framework for Bevy ECS.
 ```rust
 use bevy::prelude::*;
 use bevy_fsm::{FSMState, FSMTransition, FSMPlugin, StateChangeRequest, Enter, Exit, Transition, fsm_observer};
-use bevy_enum_event::EnumEvent;
 
 fn plugin(app: &mut App) {
     app.add_plugins(FSMPlugin::<LifeFSM>::default());
@@ -43,7 +42,7 @@ fn plugin(app: &mut App) {
     fsm_observer!(app, LifeFSM, on_transition_dying_dead);
 }
 
-#[derive(Component, EnumEvent, FSMState, Reflect, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Component, FSMState, Reflect, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[reflect(Component)]
 enum LifeFSM {
     Alive,
@@ -71,11 +70,8 @@ fn on_exit_alive(trigger: On<Exit<life_fsm::Alive>>) {
     println!("Entity {} was unalived.", trigger.entity);
 }
 
-fn on_transition_dying_dead(
-    trigger: On<Transition<life_fsm::Dying, life_fsm::Alive>>,
-    mut commands: Commands
-) {
-    println!("Entity {} was saved from the brink of death.", trigger.entity);
+fn on_transition_dying_dead(trigger: On<Transition<life_fsm::Dying, life_fsm::Dead>>) {
+    println!("Entity {} has died.", trigger.entity);
 }
 ```
 
@@ -103,26 +99,29 @@ impl FSMTransition for MyFSM {
 }
 ```
 
-### EnumEvent and FSMState Derives
+### FSMState and FSMTransition Derives
 
-Use these derive macros to generate variant-specific events:
+Two derive macros do all the work:
 
-- **`#[derive(EnumEvent)]`** - Generates variant-specific event types
-- **`#[derive(FSMState)]`** - Implements FSM-specific trigger methods
+- **`#[derive(FSMState)]`** - Generates a `snake_case` module of per-variant marker
+  types (e.g. `block_fsm::Tile`) plus the FSM trigger methods. The markers are the
+  type parameters you plug into `Enter<T>` / `Exit<T>` / `Transition<F, T>`. They are
+  deliberately *not* standalone Bevy events, so a variant can never be triggered on
+  its own and bypass the state machine.
+- **`#[derive(FSMTransition)]`** - Provides "allow all" transition behavior. Skip it
+  and implement `FSMTransition` manually for custom rules.
 
 ```rust
 use bevy::prelude::*;
-use bevy_fsm::{EnumEvent, FSMState, FSMTransition, Enter, Exit};
+use bevy_fsm::{FSMState, FSMTransition, Enter, Exit};
 
-#[derive(Component, EnumEvent, FSMTransition, FSMState, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Component, FSMTransition, FSMState, Reflect, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[reflect(Component)]
 enum BlockFSM {
     Tile,
     Loose,
-    Disabled
+    Disabled,
 }
-
-// FSMTransition derive provides "allow all" behavior
-// For custom rules, skip the derive and implement manually
 
 fn on_tile_enter(enter: On<Enter<block_fsm::Tile>>, /* ... */) { }
 fn on_tile_exit(exit: On<Exit<block_fsm::Tile>>, /* ... */) { }
@@ -296,14 +295,13 @@ app.add_plugins(FSMPlugin::<LifeFSM>::new().ignore_fsm_addition());
 ## Testing
 
 ```rust
-use bevy_fsm::{FSMPlugin, fsm_observer};
+use bevy_fsm::{FSMPlugin, StateChangeRequest};
 
 #[test]
 fn test_state_transition() {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
     app.add_plugins(FSMPlugin::<LifeFSM>::default());
-    fsm_observer!(app, LifeFSM, on_dying);
 
     let entity = app.world_mut().spawn(LifeFSM::Alive).id();
     app.update();

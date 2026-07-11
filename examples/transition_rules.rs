@@ -15,9 +15,7 @@
 //! Run with: `cargo run --example transition_rules`
 
 use bevy::prelude::*;
-use bevy_fsm::{
-    Enter, EnumEvent, FSMPlugin, FSMState, FSMTransition, StateChangeRequest, fsm_observer,
-};
+use bevy_fsm::{Enter, FSMPlugin, FSMState, FSMTransition, StateChangeRequest, fsm_observer};
 
 fn main() {
     let mut app = App::new();
@@ -36,7 +34,7 @@ fn main() {
 }
 
 /// Game states shared with the `fully_connected` example.
-#[derive(Component, EnumEvent, FSMState, Reflect, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Component, FSMState, Reflect, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[reflect(Component)]
 enum GameState {
     MainMenu,

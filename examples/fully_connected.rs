@@ -2,7 +2,7 @@
 //!
 //! This demonstrates:
 //! - Zero boilerplate FSM with default "allow all transitions" behavior
-//! - Just three derives: #[derive(EnumEvent, `FSMTransition`, `FSMState`)]
+//! - Just two derives: #[derive(`FSMTransition`, `FSMState`)]
 //! - No manual `FSMTransition` implementation needed
 //! - Using `fsm_observer`! macro to register observers in the FSM hierarchy
 //! - ALL transitions are allowed (fully connected state graph)
@@ -10,9 +10,7 @@
 //! Run with: `cargo run --example fully_connected`
 
 use bevy::prelude::*;
-use bevy_fsm::{
-    Enter, EnumEvent, Exit, FSMPlugin, FSMState, FSMTransition, StateChangeRequest, fsm_observer,
-};
+use bevy_fsm::{Enter, Exit, FSMPlugin, FSMState, FSMTransition, StateChangeRequest, fsm_observer};
 
 fn main() {
     let mut app = App::new();
@@ -31,9 +29,7 @@ fn main() {
 /// Define a simple game state FSM.
 ///
 /// The `FSMTransition` derive gives us "allow all transitions" by default.
-#[derive(
-    Component, EnumEvent, FSMTransition, FSMState, Reflect, Clone, Copy, Debug, PartialEq, Eq, Hash,
-)]
+#[derive(Component, FSMTransition, FSMState, Reflect, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[reflect(Component)]
 enum GameState {
     MainMenu,

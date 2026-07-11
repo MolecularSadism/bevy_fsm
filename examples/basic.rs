@@ -14,8 +14,7 @@
 
 use bevy::prelude::*;
 use bevy_fsm::{
-    Enter, EnumEvent, Exit, FSMPlugin, FSMState, FSMTransition, StateChangeRequest, Transition,
-    fsm_observer,
+    Enter, Exit, FSMPlugin, FSMState, FSMTransition, StateChangeRequest, Transition, fsm_observer,
 };
 
 fn main() {
@@ -35,7 +34,7 @@ fn main() {
 }
 
 /// Define the Life FSM with three states
-#[derive(Component, EnumEvent, FSMState, Reflect, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Component, FSMState, Reflect, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[reflect(Component)]
 enum LifeFSM {
     Alive,

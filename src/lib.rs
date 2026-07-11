@@ -18,7 +18,6 @@
 //! ```rust
 //! use bevy::prelude::*;
 //! use bevy_fsm::{FSMState, FSMTransition, FSMPlugin, StateChangeRequest, Enter, Exit, Transition, fsm_observer};
-//! use bevy_enum_event::EnumEvent;
 //!
 //! fn plugin(app: &mut App) {
 //!     // FSMPlugin automatically sets up the observer hierarchy on first use
@@ -34,7 +33,7 @@
 //! }
 //!
 //! // Zero boilerplate - just derive FSMTransition for "allow all" behavior!
-//! #[derive(Component, EnumEvent, FSMTransition, FSMState, Reflect, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+//! #[derive(Component, FSMTransition, FSMState, Reflect, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 //! #[reflect(Component)]
 //! enum LifeFSM {
 //!     Alive,
@@ -148,9 +147,8 @@ use bevy::{
     platform::collections::{HashMap, HashSet},
     reflect::GetTypeRegistration,
 };
-// Re-export EnumEvent from bevy_enum_event and FSM derives from bevy_fsm_macros
+// Re-export FSM derives from bevy_fsm_macros.
 // Note: FSMState and FSMTransition are both traits (below) and derive macros (from bevy_fsm_macros)
-pub use bevy_enum_event::EnumEvent;
 pub use bevy_fsm_macros::{FSMState, FSMTransition};
 use std::any::TypeId;
 
@@ -165,8 +163,7 @@ use std::any::TypeId;
 /// ```
 /// # use bevy::prelude::*;
 /// # use bevy_fsm::{FSMState, FSMTransition, fsm_observer, Enter};
-/// # use bevy_enum_event::EnumEvent;
-/// # #[derive(Component, EnumEvent, FSMTransition, FSMState, Reflect, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// # #[derive(Component, FSMTransition, FSMState, Reflect, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 /// # enum LifeFSM { Alive, Dying }
 /// # fn on_dying_observer(_: On<Enter<life_fsm::Dying>>) {}
 /// # let mut app = App::new();
@@ -719,8 +716,7 @@ where
 /// ```
 /// # use bevy::prelude::*;
 /// # use bevy_fsm::{FSMState, FSMTransition, on_fsm_added};
-/// # use bevy_enum_event::EnumEvent;
-/// # #[derive(Component, EnumEvent, FSMTransition, FSMState, Reflect, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// # #[derive(Component, FSMTransition, FSMState, Reflect, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 /// # enum YourFSM { StateA }
 /// # let mut app = App::new();
 /// app.world_mut().add_observer(on_fsm_added::<YourFSM>);
@@ -744,8 +740,7 @@ pub fn on_fsm_added<S: FSMState>(trigger: On<Add, S>, mut commands: Commands, q_
 /// ```
 /// # use bevy::prelude::*;
 /// # use bevy_fsm::{FSMState, FSMTransition, apply_state_request};
-/// # use bevy_enum_event::EnumEvent;
-/// # #[derive(Component, EnumEvent, FSMTransition, FSMState, Reflect, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// # #[derive(Component, FSMTransition, FSMState, Reflect, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 /// # enum YourFSM { StateA }
 /// # let mut app = App::new();
 /// app.world_mut().add_observer(apply_state_request::<YourFSM>);
@@ -864,8 +859,7 @@ pub fn apply_state_request<S: FSMState + core::hash::Hash>(
 /// ```
 /// # use bevy::prelude::*;
 /// # use bevy_fsm::{FSMState, FSMTransition, FSMPlugin, fsm_observer, Enter};
-/// # use bevy_enum_event::{EnumEvent};
-/// # #[derive(Component, EnumEvent, FSMTransition, FSMState, Reflect, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// # #[derive(Component, FSMTransition, FSMState, Reflect, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 /// # enum LifeFSM { Alive, Dying }
 /// # fn on_dying_observer(_: On<Enter<life_fsm::Dying>>) {}
 /// # let mut app = App::new();
