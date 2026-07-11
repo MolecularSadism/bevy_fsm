@@ -9,9 +9,7 @@
 //! Run with: cargo run --example simple
 
 use bevy::prelude::*;
-use bevy_fsm::{
-    Enter, Exit, FSMPlugin, FSMState, FSMTransition, StateChangeRequest, fsm_observer,
-};
+use bevy_fsm::{Enter, Exit, FSMPlugin, FSMState, FSMTransition, StateChangeRequest, fsm_observer};
 
 fn main() {
     let mut app = App::new();
