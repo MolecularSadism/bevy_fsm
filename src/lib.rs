@@ -868,13 +868,13 @@ pub fn apply_state_request<S: FSMState + core::hash::Hash>(
 /// // Register additional observers using fsm_observer! macro:
 /// fsm_observer!(app, LifeFSM, on_dying_observer);
 /// ```
-pub struct FSMPlugin<S: FSMState + core::hash::Hash + Component> {
+pub struct FSMPlugin<S: FSMState + core::hash::Hash> {
     /// If true, skip registering the `on_fsm_added` observer
     ignore_fsm_addition: bool,
     _phantom: std::marker::PhantomData<S>,
 }
 
-impl<S: FSMState + core::hash::Hash + Component> Default for FSMPlugin<S> {
+impl<S: FSMState + core::hash::Hash> Default for FSMPlugin<S> {
     fn default() -> Self {
         Self {
             ignore_fsm_addition: false,
@@ -883,7 +883,7 @@ impl<S: FSMState + core::hash::Hash + Component> Default for FSMPlugin<S> {
     }
 }
 
-impl<S: FSMState + core::hash::Hash + Component> FSMPlugin<S> {
+impl<S: FSMState + core::hash::Hash> FSMPlugin<S> {
     /// Create a new `FSMPlugin` with default settings.
     #[must_use]
     pub fn new() -> Self {
@@ -900,9 +900,7 @@ impl<S: FSMState + core::hash::Hash + Component> FSMPlugin<S> {
     }
 }
 
-impl<S: FSMState + core::hash::Hash + Component + Reflect + GetTypeRegistration> Plugin
-    for FSMPlugin<S>
-{
+impl<S: FSMState + core::hash::Hash + Reflect + GetTypeRegistration> Plugin for FSMPlugin<S> {
     fn build(&self, app: &mut App) {
         // Register the FSM type for reflection
         app.register_type::<S>();
@@ -1169,227 +1167,73 @@ mod tests {
         assert_eq!(*app.world().get::<TestState>(e).unwrap(), TestState::B);
     }
 
-    #[allow(clippy::too_many_lines, clippy::uninlined_format_args)]
     #[test]
     fn fsm_observer_macro_registers_and_organizes() {
-        println!("\n=== TEST START: fsm_observer_macro_registers_and_organizes ===");
-
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.init_resource::<EventLog>();
         app.world_mut()
             .add_observer(apply_state_request::<TestState>);
-        println!("✓ App initialized with MinimalPlugins and apply_state_request observer");
 
-        // Use the macro to register observer (should parent itself automatically)
+        // The macro should register the observer and parent it automatically.
         let observer_entity = fsm_observer!(app, TestState, on_enter).id();
-        println!("✓ fsm_observer! macro called for TestState::on_enter");
-        println!("  Observer entity created: {:?}", observer_entity);
 
-        // Verify the observer entity was created with the correct components
-        {
-            let world = app.world();
-            if let Some(name) = world.get::<Name>(observer_entity) {
-                println!("  Observer entity has Name: '{}'", name.as_str());
-            } else {
-                println!("  WARNING: Observer entity has NO Name component!");
-            }
-            if world
+        let world = app.world();
+        assert_eq!(
+            world.get::<Name>(observer_entity).map(Name::as_str),
+            Some("on_enter"),
+            "observer should be named after the system"
+        );
+        assert!(
+            world
                 .get::<FSMObserverMarker<TestState>>(observer_entity)
-                .is_some()
-            {
-                println!("  Observer entity has FSMObserverMarker<TestState>");
-            } else {
-                println!("  WARNING: Observer entity has NO FSMObserverMarker!");
-            }
+                .is_some(),
+            "observer should carry the FSM marker"
+        );
 
-            // Check if the observer has ChildOf component (Bevy 0.17 hierarchy)
-            if let Some(child_of) = world.get::<ChildOf>(observer_entity) {
-                println!(
-                    "  Observer entity has ChildOf component, parent: {:?}",
-                    child_of.parent()
-                );
-            } else {
-                println!("  WARNING: Observer entity has NO ChildOf component!");
-                println!("  This indicates add_child() might not be working as expected!");
-            }
-        }
-
-        println!("\n--- Checking if observer entity still exists BEFORE spawning test entity ---");
-        {
-            let world = app.world();
-            if world.get_entity(observer_entity).is_ok() {
-                println!("  ✓ Observer entity {:?} still exists", observer_entity);
-            } else {
-                println!(
-                    "  ERROR: Observer entity {:?} already despawned!",
-                    observer_entity
-                );
-            }
-        }
-
+        // The registered observer must actually fire.
         let e = app.world_mut().spawn(TestState::A).id();
-        println!("✓ Entity spawned with TestState::A, entity id: {:?}", e);
-
         app.world_mut()
             .commands()
             .trigger(StateChangeRequest::<TestState> {
                 entity: e,
                 next: TestState::B,
             });
-        println!("✓ StateChangeRequest triggered: A -> B");
-
         app.update();
-        println!("✓ App updated (commands flushed)");
-
-        println!("\n--- Checking if observer entity still exists AFTER app.update() ---");
-        {
-            let world = app.world();
-            if world.get_entity(observer_entity).is_ok() {
-                println!("  ✓ Observer entity {:?} still exists", observer_entity);
-                if let Some(name) = world.get::<Name>(observer_entity) {
-                    println!("    Name: '{}'", name.as_str());
-                } else {
-                    println!("    WARNING: Name component removed!");
-                }
-            } else {
-                println!(
-                    "  ERROR: Observer entity {:?} was despawned during app.update()!",
-                    observer_entity
-                );
-            }
-        }
-
-        let log = app.world().resource::<EventLog>();
-        println!(
-            "✓ EventLog retrieved: enters={:?}, exits={:?}",
-            log.enters, log.exits
+        assert_eq!(
+            app.world().resource::<EventLog>().enters,
+            vec![TestState::B]
         );
-        assert_eq!(log.enters, vec![TestState::B]);
 
-        // Check that FSMObservers root was created and hierarchy is correct
-        println!("\n--- Checking FSMObservers root ---");
+        // Hierarchy: FSMObservers root -> TestState group -> observer.
         let root = {
             let mut query = app
                 .world_mut()
-                .query_filtered::<(Entity, &Name), With<FSMObserversRoot>>();
-            let roots: Vec<_> = query.iter(app.world()).collect();
-            println!("Found {} FSMObserversRoot entities:", roots.len());
-            for (entity, name) in &roots {
-                println!("  - Entity {:?}, Name: '{}'", entity, name.as_str());
-            }
+                .query_filtered::<Entity, With<FSMObserversRoot>>();
             query
-                .iter(app.world())
-                .map(|(entity, _)| entity)
-                .next()
+                .single(app.world())
                 .expect("FSMObservers root entity should be created")
         };
-        println!("✓ Root entity: {:?}", root);
-
-        println!("\n--- Checking TestState group ---");
         let group = {
             let mut query = app
                 .world_mut()
-                .query_filtered::<(Entity, &Name), With<FSMObserverGroup<TestState>>>();
-            let groups: Vec<_> = query.iter(app.world()).collect();
-            println!(
-                "Found {} FSMObserverGroup<TestState> entities:",
-                groups.len()
-            );
-            for (entity, name) in &groups {
-                println!("  - Entity {:?}, Name: '{}'", entity, name.as_str());
-            }
+                .query_filtered::<Entity, With<FSMObserverGroup<TestState>>>();
             query
-                .iter(app.world())
-                .map(|(entity, _)| entity)
-                .next()
+                .single(app.world())
                 .expect("TestState group should exist")
         };
-        println!("✓ Group entity: {:?}", group);
-
-        println!("\n--- Checking ALL entities with Name component ---");
-        {
-            let mut query = app.world_mut().query::<(Entity, &Name)>();
-            let all_named: Vec<_> = query.iter(app.world()).collect();
-            println!("Found {} entities with Name component:", all_named.len());
-            for (entity, name) in &all_named {
-                println!("  - Entity {:?}, Name: '{}'", entity, name.as_str());
-            }
-        }
-
-        println!("\n--- Searching specifically for 'on_enter' observer ---");
-        {
-            let mut query = app.world_mut().query::<(Entity, &Name)>();
-            let on_enter_entities: Vec<_> = query
-                .iter(app.world())
-                .filter(|(_, name)| name.as_str() == "on_enter")
-                .collect();
-            println!(
-                "Found {} entities named 'on_enter':",
-                on_enter_entities.len()
-            );
-            for (entity, name) in &on_enter_entities {
-                println!("  - Entity {:?}, Name: '{}'", entity, name.as_str());
-            }
-        }
-
-        println!("\n--- Checking hierarchy relationships (ChildOf) ---");
-        let mut group_is_child = false;
-        let mut observer_is_child = false;
-        {
-            println!("Checking all entities with ChildOf component:");
-            let mut child_count = 0;
-            let mut query = app.world_mut().query::<(Entity, &ChildOf, Option<&Name>)>();
-            for (entity_id, child_of, name) in query.iter(app.world()) {
-                child_count += 1;
-                let name_str = name.map_or("<no name>", Name::as_str);
-                println!(
-                    "  - Entity {:?}, Name: '{}', Parent: {:?}",
-                    entity_id,
-                    name_str,
-                    child_of.parent()
-                );
-                if child_of.parent() == root && name_str == "TestState" {
-                    println!("    ✓ MATCH: This is the TestState group as child of root");
-                    group_is_child = true;
-                }
-                if child_of.parent() == group && name_str == "on_enter" {
-                    println!("    ✓ MATCH: This is the on_enter observer as child of group");
-                    observer_is_child = true;
-                }
-            }
-            println!("Found {} entities with ChildOf component", child_count);
-        }
-
-        println!("\n--- ALL ENTITIES IN WORLD ---");
-        {
-            let mut count = 0;
-            let mut query = app.world_mut().query::<(Entity, Option<&Name>)>();
-            for (entity_id, name) in query.iter(app.world()) {
-                count += 1;
-                print!("  - Entity {:?}", entity_id);
-                if let Some(name) = name {
-                    print!(", Name: '{}'", name.as_str());
-                }
-                println!();
-            }
-            println!("  Total entities: {}", count);
-        }
-
-        println!("\n--- Final assertions ---");
-        println!("group_is_child: {}", group_is_child);
-        println!("observer_is_child: {}", observer_is_child);
-
-        assert!(
-            group_is_child,
+        assert_eq!(
+            app.world().get::<ChildOf>(group).map(ChildOf::parent),
+            Some(root),
             "TestState group should be child of FSMObservers"
         );
-        assert!(
-            observer_is_child,
-            "Observer should be parented under the TestState group"
+        assert_eq!(
+            app.world()
+                .get::<ChildOf>(observer_entity)
+                .map(ChildOf::parent),
+            Some(group),
+            "observer should be parented under the TestState group"
         );
-
-        println!("\n=== TEST END ===\n");
     }
 
     #[test]

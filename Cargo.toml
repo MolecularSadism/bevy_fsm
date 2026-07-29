@@ -3,7 +3,7 @@ resolver = "2"
 members = ["bevy_fsm_macros"]
 
 [workspace.package]
-version = "0.4.1"
+version = "0.5.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/ffmulks/bevy_fsm"
@@ -37,4 +37,4 @@ all-features = true
 
 [dependencies]
 bevy.workspace = true
-bevy_fsm_macros = { version = "0.4.1", path = "bevy_fsm_macros" }
+bevy_fsm_macros = { version = "0.5.0", path = "bevy_fsm_macros" }
