@@ -4,19 +4,24 @@
 [![Crates.io](https://img.shields.io/crates/v/bevy_fsm.svg)](https://crates.io/crates/bevy_fsm)
 [![Docs.rs](https://docs.rs/bevy_fsm/badge.svg)](https://docs.rs/bevy_fsm)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](https://github.com/MolecularSadism/bevy_fsm#license)
-[![Bevy](https://img.shields.io/badge/Bevy-0.19-blue.svg)](https://bevyengine.org/)
+[![Bevy](https://img.shields.io/badge/Bevy-0.18%20%E2%80%93%200.19-blue.svg)](https://bevyengine.org/)
 [![Rust](https://img.shields.io/badge/rust-2024%20edition-orange.svg)](https://www.rust-lang.org/)
 
 Observer-driven finite state machine framework for Bevy ECS.
 
 ## Bevy Compatibility
 
-| Bevy | bevy_fsm |
-|------|----------|
-| 0.19 | 0.4      |
-| 0.18 | 0.3      |
-| 0.17 | 0.2      |
-| 0.16 | 0.1      |
+| Bevy | bevy_fsm  |
+|------|-----------|
+| 0.19 | 0.4       |
+| 0.18 | 0.3, 0.4  |
+| 0.17 | 0.2       |
+| 0.16 | 0.1       |
+
+`bevy_fsm` 0.4.1+ declares `bevy = ">=0.18, <0.20"`, so it works with both
+Bevy 0.18 and 0.19 — Cargo unifies with whichever version your project uses.
+Bevy 0.17 and older are not supported by 0.4: the `EntityEvent` trait still
+required `event_target_mut` there, which was removed in Bevy 0.18.
 
 ## Features
 
