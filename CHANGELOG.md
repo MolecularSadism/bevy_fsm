@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-29
+
 ### Changed
 
 - **BREAKING**: The `bevy_enum_event` dependency has been dropped. The
@@ -14,6 +16,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `#[derive(FSMState)]` itself, so `#[derive(EnumEvent)]` is no longer needed
   (or re-exported from `bevy_fsm`). Remove `EnumEvent` from your derive lists
   and drop the `bevy_enum_event` import.
+- Widened the Bevy requirement from `0.19` to `>=0.18, <0.20`. The crate
+  compiles and passes its full test suite against both Bevy 0.18 and 0.19, so
+  projects still on 0.18 can now use bevy_fsm 0.5. (Bevy 0.17 remains
+  unsupported: its `EntityEvent` trait still required `event_target_mut`,
+  which was removed in 0.18.)
+- Removed `Cargo.lock` from the repository (library crates should not pin
+  dependency versions for consumers) and excluded `.github/` and `.gitignore`
+  from the published package. Note that `.cargo_vcs_info.json`,
+  `Cargo.toml.orig`, and a generated `Cargo.lock` still appear in the
+  crates.io tarball — those are injected by `cargo publish` itself for every
+  crate and cannot be removed.
+- Internal polish: dropped redundant `Component` bounds on `FSMPlugin`
+  (`FSMState` already implies `Component`), rewrote a debug-logging test into
+  concise assertions, and added a CI job that runs the test suite against the
+  minimum supported Bevy version (0.18).
 
 ### Notes
 

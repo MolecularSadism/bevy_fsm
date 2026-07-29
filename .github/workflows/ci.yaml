@@ -141,3 +141,32 @@ jobs:
 
       - name: Run doc tests
         run: cargo test --doc --all-features
+
+  # Run tests against the minimum supported Bevy version
+  test-bevy-min:
+    name: Test (Bevy 0.18)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: test-bevy-min
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Pin Bevy to minimum supported version
+        run: cargo update bevy --precise 0.18.1
+
+      - name: Run tests
+        run: cargo test --all-targets --all-features
+
+      - name: Run doc tests
+        run: cargo test --doc --all-features
