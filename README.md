@@ -18,11 +18,6 @@ Observer-driven finite state machine framework for Bevy ECS.
 | 0.17 | 0.2       |
 | 0.16 | 0.1       |
 
-`bevy_fsm` 0.5 declares `bevy = ">=0.18, <0.20"`, so it works with both
-Bevy 0.18 and 0.19 — Cargo unifies with whichever version your project uses.
-Bevy 0.17 and older cannot be supported by 0.5: the `EntityEvent` trait still
-required `event_target_mut` there, which was removed in Bevy 0.18.
-
 ## Features
 
 - **Enum-based states**: Keep your states as simple enum variants
