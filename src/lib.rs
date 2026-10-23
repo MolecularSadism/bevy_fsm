@@ -722,7 +722,7 @@ where
 /// app.world_mut().add_observer(on_fsm_added::<YourFSM>);
 /// ```
 #[allow(clippy::needless_pass_by_value)]
-pub fn on_fsm_added<S: FSMState>(trigger: On<Add, S>, mut commands: Commands, q_state: Query<&S>) {
+pub fn on_fsm_added<S: FSMState>(trigger: On<Add<S>>, mut commands: Commands, q_state: Query<&S>) {
     let entity = trigger.entity;
 
     let Ok(&state) = q_state.get(entity) else {
@@ -1669,7 +1669,7 @@ mod tests {
         }
     }
 
-    /// `On<Add, S>` must be *add-only*: re-inserting the same state component
+    /// `On<Add<S>>` must be *add-only*: re-inserting the same state component
     /// (exactly what `apply_state_request` does on every transition) must NOT
     /// re-trigger `on_fsm_added`. Bevy 0.19's "Lifecycle event changes"
     /// renamed `Replace` to `Discard`; this guards that `Add` still fires only

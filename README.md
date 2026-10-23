@@ -4,7 +4,7 @@
 [![Crates.io](https://img.shields.io/crates/v/bevy_fsm.svg)](https://crates.io/crates/bevy_fsm)
 [![Docs.rs](https://docs.rs/bevy_fsm/badge.svg)](https://docs.rs/bevy_fsm)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](https://github.com/MolecularSadism/bevy_fsm#license)
-[![Bevy](https://img.shields.io/badge/Bevy-0.18%20%E2%80%93%200.19-blue.svg)](https://bevyengine.org/)
+[![Bevy](https://img.shields.io/badge/Bevy-0.20-blue.svg)](https://bevyengine.org/)
 [![Rust](https://img.shields.io/badge/rust-2024%20edition-orange.svg)](https://www.rust-lang.org/)
 
 Observer-driven finite state machine framework for Bevy ECS.
@@ -13,6 +13,7 @@ Observer-driven finite state machine framework for Bevy ECS.
 
 | Bevy | bevy_fsm  |
 |------|-----------|
+| 0.20 | 0.6       |
 | 0.19 | 0.4, 0.5  |
 | 0.18 | 0.3, 0.5  |
 | 0.17 | 0.2       |

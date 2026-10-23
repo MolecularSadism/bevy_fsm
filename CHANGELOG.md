@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-22
+
+### Changed
+
+- **BREAKING**: Migrated to Bevy 0.20 (requires Rust 1.97.1). Bevy 0.18 and
+  0.19 are no longer supported.
+- Removed the CI job that tested against Bevy 0.18.
+
+### Migration
+
+Bevy 0.20 changed lifecycle observers to carry the component bundle as a
+generic of the lifecycle type: `On<Add, S>` is now `On<Add<S>>` (likewise
+`Insert`, `Remove`, etc.). `on_fsm_added` was updated accordingly. If you
+register your own lifecycle observers on FSM components, update them the same
+way. No other `bevy_fsm` API changed.
+
 ## [0.5.0] - 2026-07-29
 
 ### Changed
