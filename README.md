@@ -13,7 +13,7 @@ Observer-driven finite state machine framework for Bevy ECS.
 
 | Bevy | bevy_fsm  |
 |------|-----------|
-| 0.20 | 0.6       |
+| 0.20 | 0.6, 0.7  |
 | 0.19 | 0.4, 0.5  |
 | 0.18 | 0.3, 0.5  |
 | 0.17 | 0.2       |
@@ -23,7 +23,8 @@ Observer-driven finite state machine framework for Bevy ECS.
 
 - **Enum-based states**: Keep your states as simple enum variants
 - **Observer-driven**: React to state changes via Bevy observers
-- **Variant-specific events**: No runtime state checks needed in observers
+- **Variant-specific observers**: `On<Enter<life_fsm::Dying>>` runs only when `Dying` is entered
+- **Enforced rules**: The state is an immutable component; it only changes through a validated request
 - **Flexible validation**: Per-entity and per-type transition rules
 - **Clean API**: FSMPlugin for automatic setup
 - **Initial state support**: Automatic enter events when FSM components are added
@@ -33,17 +34,18 @@ Observer-driven finite state machine framework for Bevy ECS.
 
 ```rust
 use bevy::prelude::*;
-use bevy_fsm::{FSMState, FSMTransition, FSMPlugin, StateChangeRequest, Enter, Exit, Transition, fsm_observer};
+use bevy_fsm::{FSMState, FSMTransition, FSMPlugin, StateChangeRequest, Enter, Exit, fsm_observer};
 
 fn plugin(app: &mut App) {
     app.add_plugins(FSMPlugin::<LifeFSM>::default());
 
     fsm_observer!(app, LifeFSM, on_enter_dying);
     fsm_observer!(app, LifeFSM, on_exit_alive);
-    fsm_observer!(app, LifeFSM, on_transition_dying_dead);
+    fsm_observer!(app, LifeFSM, on_exit_dying);
 }
 
 #[derive(Component, FSMState, Reflect, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[component(immutable)]
 #[reflect(Component)]
 enum LifeFSM {
     Alive,
@@ -71,8 +73,15 @@ fn on_exit_alive(trigger: On<Exit<life_fsm::Alive>>) {
     println!("Entity {} was unalived.", trigger.entity);
 }
 
-fn on_transition_dying_dead(trigger: On<Transition<life_fsm::Dying, life_fsm::Dead>>) {
-    println!("Entity {} has died.", trigger.entity);
+// Exit carries the destination, Enter the origin.
+fn on_exit_dying(trigger: On<Exit<life_fsm::Dying>>) {
+    if trigger.to == LifeFSM::Dead {
+        println!("Entity {} has died.", trigger.entity);
+    }
+}
+
+fn kill(commands: &mut Commands, entity: Entity) {
+    commands.queue(StateChangeRequest { entity, next: LifeFSM::Dying });
 }
 ```
 
@@ -105,10 +114,11 @@ impl FSMTransition for MyFSM {
 Two derive macros do all the work:
 
 - **`#[derive(FSMState)]`** - Generates a `snake_case` module of per-variant marker
-  types (e.g. `block_fsm::Tile`) plus the FSM trigger methods. The markers are the
-  type parameters you plug into `Enter<T>` / `Exit<T>` / `Transition<F, T>`. They are
-  deliberately *not* standalone Bevy events, so a variant can never be triggered on
-  its own and bypass the state machine.
+  types (e.g. `block_fsm::Tile`). A marker names its variant in observer signatures:
+  `On<Enter<block_fsm::Tile>>` runs only when `Tile` is entered. Markers are
+  zero-sized components that cannot be constructed; bevy_fsm uses their component ids
+  to route each event straight to the observers of that variant. The enum must be
+  `#[component(immutable)]`, which the derive enforces at compile time.
 - **`#[derive(FSMTransition)]`** - Provides "allow all" transition behavior. Skip it
   and implement `FSMTransition` manually for custom rules.
 
@@ -117,6 +127,7 @@ use bevy::prelude::*;
 use bevy_fsm::{FSMState, FSMTransition, Enter, Exit};
 
 #[derive(Component, FSMTransition, FSMState, Reflect, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[component(immutable)]
 #[reflect(Component)]
 enum BlockFSM {
     Tile,
@@ -126,6 +137,31 @@ enum BlockFSM {
 
 fn on_tile_enter(enter: On<Enter<block_fsm::Tile>>, /* ... */) { }
 fn on_tile_exit(exit: On<Exit<block_fsm::Tile>>, /* ... */) { }
+```
+
+### Changing State
+
+The state component is immutable, so `&mut` access does not compile. Two commands
+change it:
+
+- **`StateChangeRequest { entity, next }`** - Validates the transition, fires `Exit`,
+  writes the new state, then fires `Enter`. Queue it from any system with
+  `commands.queue(...)`; rejected requests are dropped. In exclusive code,
+  `request.try_apply(world)` returns `Ok(previous)` or a `TransitionError`
+  (`NoState`, `Unchanged`, `Denied`).
+- **`ResetState { entity, state }`** - Overwrites the state without validation and
+  without events, for re-initialising pooled or recycled entities.
+
+```rust
+use bevy_fsm::{ResetState, StateChangeRequest};
+
+fn loosen(commands: &mut Commands, entity: Entity) {
+    commands.queue(StateChangeRequest { entity, next: BlockFSM::Loose });
+}
+
+fn recycle(commands: &mut Commands, entity: Entity) {
+    commands.queue(ResetState { entity, state: BlockFSM::Tile });
+}
 ```
 
 ### FSMPlugin - Automatic Setup
@@ -161,22 +197,22 @@ fn plugin(app: &mut App) {
 
 ### Manual Observer Registration
 
-```rust
-use bevy_fsm::{apply_state_request, on_fsm_added};
+`fsm_observer!` only adds the hierarchy; a plain observer works the same way:
 
-app.world_mut().add_observer(apply_state_request::<MyFSM>);
+```rust
+use bevy_fsm::on_fsm_added;
+
 app.world_mut().add_observer(on_fsm_added::<MyFSM>);
 app.world_mut().add_observer(on_enter_loose);
 ```
 
 ### Generic Event Observers
 
-Observe generic events for runtime state checking:
+Key `Enter`/`Exit` by the FSM itself to observe every variant:
 
 ```rust
 fn on_any_enter(trigger: On<Enter<BlockFSM>>, mut commands: Commands) {
-    let state = trigger.event().state;
-    match state {
+    match trigger.state {
         BlockFSM::Tile => { /* handle tile */ },
         BlockFSM::Loose => { /* handle loose */ },
         _ => {}
@@ -252,29 +288,30 @@ impl FSMTransition for AnimationState {
 
 ## Event Types
 
-All transition events implement `EntityEvent` and contain an `entity` field:
+`On<Enter<K>>` and `On<Exit<K>>` deref to these `EntityEvent`s, where `K` is the FSM
+(every variant) or one of its variant markers (that variant only):
 
-- `StateChangeRequest<S>`: Request to change state (`entity`, `next`)
-- `Enter<S>`: Enter event (`entity`, `state`)
-- `Exit<S>`: Exit event (`entity`, `state`)
-- `Transition<S, S>`: Transition event (`entity`, `from`, `to`)
+- `EnterEvent<S>`: `entity`, `state`, `from` (`None` for the initial state)
+- `ExitEvent<S>`: `entity`, `state`, `to`
 
 Access the entity via `trigger.entity` (using Deref).
 
 ## How It Works
 
-When a state change is requested:
+When a `StateChangeRequest` is applied:
 
-1. `apply_state_request` observer validates the transition
-2. Exit events are triggered
-3. Transition event is triggered
-4. State component is updated
-5. Enter events are triggered
+1. The transition is validated (`FSMOverride`, then `FSMTransition`)
+2. `Exit` fires for the current state; commands its observers queue are applied
+3. The state component is written
+4. `Enter` fires for the new state
+
+Each event fires once, keyed by the variant's marker component, so only the observers
+of that variant and the FSM-wide observers run.
 
 When an FSM component is first added:
 
 1. `on_fsm_added` observer detects the new component
-2. Enter events are triggered for the initial state
+2. `Enter` fires for the initial state with `from: None`
 
 ## Important: Timing of Initial Enter Events
 
@@ -307,8 +344,8 @@ fn test_state_transition() {
     let entity = app.world_mut().spawn(LifeFSM::Alive).id();
     app.update();
 
-    app.world_mut().commands().trigger(
-        StateChangeRequest::<LifeFSM> { entity, next: LifeFSM::Dying },
+    app.world_mut().commands().queue(
+        StateChangeRequest { entity, next: LifeFSM::Dying },
     );
     app.update();
 

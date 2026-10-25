@@ -29,6 +29,7 @@ fn main() {
 ///
 /// The `FSMTransition` derive gives us "allow all transitions" by default.
 #[derive(Component, FSMTransition, FSMState, Reflect, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[component(immutable)]
 #[reflect(Component)]
 enum GameState {
     MainMenu,
@@ -83,7 +84,7 @@ fn cycle_states(
 
             if let Some(next) = next_state {
                 println!("\n{name} transitioning: {state:?} -> {next:?}");
-                commands.trigger(StateChangeRequest { entity, next });
+                commands.queue(StateChangeRequest { entity, next });
             }
         }
     }
