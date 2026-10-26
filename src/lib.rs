@@ -1,14 +1,17 @@
 //! Observer-driven finite state machine framework for Bevy ECS.
 //!
 //! This crate provides a lightweight framework for modeling enum-based state machines
-//! using Bevy's observer system. State machines are defined as enum components with
-//! automatic variant-specific event generation.
+//! using Bevy's observer system. State machines are immutable enum components; every
+//! state change goes through a validated [`StateChangeRequest`] that fires [`Enter`] and
+//! [`Exit`] events, either for one variant or for the whole FSM.
 //!
 //! # Features
 //!
 //! - **Enum-based states**: Keep your states as simple enum variants
 //! - **Observer-driven**: React to state changes via Bevy observers
-//! - **Variant-specific events**: No runtime state checks needed in observers
+//! - **Variant-specific observers**: `On<Enter<life_fsm::Dying>>` runs only on entering `Dying`
+//! - **Enforced rules**: The state component is immutable, so it only changes through a
+//!   validated request
 //! - **Flexible validation**: Per-entity and per-type transition rules
 //! - **Minimal API**: `FSMPlugin` for automatic setup
 //! - **Organized hierarchy**: Observers automatically organized in entity hierarchy
@@ -17,23 +20,22 @@
 //!
 //! ```rust
 //! use bevy::prelude::*;
-//! use bevy_fsm::{FSMState, FSMTransition, FSMPlugin, StateChangeRequest, Enter, Exit, Transition, fsm_observer};
+//! use bevy_fsm::{FSMState, FSMTransition, FSMPlugin, StateChangeRequest, Enter, Exit, fsm_observer};
 //!
 //! fn plugin(app: &mut App) {
 //!     // FSMPlugin automatically sets up the observer hierarchy on first use
 //!     app.add_plugins(FSMPlugin::<LifeFSM>::default());
 //!
-//!     // Use fsm_observer! macro for variant-specific observers
-//!     // This is functionally identical to a typed global observer but gets automatically parented
-//!     // into a custom FSMObservers/LifeFSM/on_enter_dying hierarchy that keeps observers nicely
-//!     // sorted by their respective FSM.
+//!     // fsm_observer! registers a plain observer and parents it into the
+//!     // FSMObservers/LifeFSM/on_enter_dying hierarchy, keeping observers sorted by FSM.
 //!     fsm_observer!(app, LifeFSM, on_enter_dying);
 //!     fsm_observer!(app, LifeFSM, on_exit_alive);
-//!     fsm_observer!(app, LifeFSM, on_transition_dying_dead);
+//!     fsm_observer!(app, LifeFSM, on_exit_dying);
 //! }
 //!
 //! // Zero boilerplate - just derive FSMTransition for "allow all" behavior!
 //! #[derive(Component, FSMTransition, FSMState, Reflect, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+//! #[component(immutable)]
 //! #[reflect(Component)]
 //! enum LifeFSM {
 //!     Alive,
@@ -61,11 +63,18 @@
 //!     println!("Entity {} was unalived.", trigger.entity);
 //! }
 //!
-//! fn on_transition_dying_dead(
-//!     trigger: On<Transition<life_fsm::Dying, life_fsm::Dead>>,
-//!     mut commands: Commands
-//! ) {
-//!     commands.entity(trigger.entity).despawn()
+//! // Exit carries the destination, Enter the origin.
+//! fn on_exit_dying(trigger: On<Exit<life_fsm::Dying>>, mut commands: Commands) {
+//!     if trigger.to == LifeFSM::Dead {
+//!         commands.entity(trigger.entity).despawn();
+//!     }
+//! }
+//!
+//! // Request a transition from any system:
+//! fn kill(mut commands: Commands, q: Query<Entity, With<LifeFSM>>) {
+//!     for entity in &q {
+//!         commands.queue(StateChangeRequest { entity, next: LifeFSM::Dying });
+//!     }
 //! }
 //! ```
 //!
@@ -81,14 +90,13 @@
 //! #[derive(Component)]
 //! struct Energy(f32);
 //!
-//! #[derive(Component, Clone, Copy, Debug, Hash, PartialEq, Eq)]
+//! #[derive(Component, FSMState, Clone, Copy, Debug, Hash, PartialEq, Eq)]
+//! #[component(immutable)]
 //! enum ActionFSM {
 //!     Idle,
 //!     Casting,
 //!     Exhausted,
 //! }
-//!
-//! impl FSMState for ActionFSM {}
 //!
 //! impl FSMTransition for ActionFSM {
 //!     fn can_transition(from: Self, to: Self) -> bool {
@@ -128,12 +136,11 @@
 //! ```text
 //! FSMObservers (root)
 //! ├─ LifeFSM
-//! │  ├─ apply_state_request
 //! │  ├─ on_fsm_added
 //! │  ├─ on_dying
 //! │  └─ on_dead
 //! ├─ BlockFSM
-//! │  ├─ apply_state_request
+//! │  ├─ on_fsm_added
 //! │  └─ ...
 //! └─ ...
 //! ```
@@ -141,16 +148,30 @@
 //! This hierarchy is created automatically when you add your first FSM plugin,
 //! with no additional setup required.
 
+// Lets the derive macros' `::bevy_fsm` paths resolve inside this crate's own tests.
+extern crate self as bevy_fsm;
+
 use bevy::prelude::*;
 use bevy::{
-    ecs::event::EntityEvent,
+    ecs::{
+        component::{ComponentId, Immutable},
+        event::{EntityComponentsTrigger, EventPattern},
+    },
     platform::collections::{HashMap, HashSet},
     reflect::GetTypeRegistration,
 };
 // Re-export FSM derives from bevy_fsm_macros.
 // Note: FSMState and FSMTransition are both traits (below) and derive macros (from bevy_fsm_macros)
 pub use bevy_fsm_macros::{FSMState, FSMTransition};
+use core::marker::PhantomData;
 use std::any::TypeId;
+
+/// Paths used by the code `#[derive(FSMState)]` generates.
+#[doc(hidden)]
+pub mod __private {
+    pub use bevy::ecs::component::{Component, ComponentId, Immutable, StorageType};
+    pub use bevy::ecs::world::World;
+}
 
 /// Macro for registering FSM observers sorting them into the per-FSM hierarchy.
 ///
@@ -164,6 +185,7 @@ use std::any::TypeId;
 /// # use bevy::prelude::*;
 /// # use bevy_fsm::{FSMState, FSMTransition, fsm_observer, Enter};
 /// # #[derive(Component, FSMTransition, FSMState, Reflect, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// # #[component(immutable)]
 /// # enum LifeFSM { Alive, Dying }
 /// # fn on_dying_observer(_: On<Enter<life_fsm::Dying>>) {}
 /// # let mut app = App::new();
@@ -191,13 +213,13 @@ macro_rules! fsm_observer {
 #[derive(Component)]
 #[doc(hidden)]
 pub struct FSMObserverMarker<S: Send + Sync + 'static> {
-    _phantom: std::marker::PhantomData<S>,
+    _phantom: PhantomData<S>,
 }
 
 impl<S: Send + Sync + 'static> Default for FSMObserverMarker<S> {
     fn default() -> Self {
         Self {
-            _phantom: std::marker::PhantomData,
+            _phantom: PhantomData,
         }
     }
 }
@@ -211,76 +233,89 @@ impl<S: Send + Sync + 'static> Default for FSMObserverMarker<S> {
 #[derive(Component)]
 #[doc(hidden)]
 pub struct FSMObserverGroup<S: Send + Sync + 'static> {
-    _phantom: std::marker::PhantomData<S>,
+    _phantom: PhantomData<S>,
 }
 
 impl<S: Send + Sync + 'static> Default for FSMObserverGroup<S> {
     fn default() -> Self {
         Self {
-            _phantom: std::marker::PhantomData,
+            _phantom: PhantomData,
         }
     }
 }
 
-/// Event requesting a state change for an entity.
-#[derive(Event, Debug, Clone, Copy)]
-pub struct StateChangeRequest<S: Copy + Send + Sync + 'static> {
-    pub entity: Entity,
-    pub next: S,
-}
-
-impl<S: Copy + Send + Sync + 'static> EntityEvent for StateChangeRequest<S> {
-    fn event_target(&self) -> Entity {
-        self.entity
-    }
-}
-
-/// Event fired when an entity exits a state.
-#[derive(Event, Debug, Clone, Copy)]
-pub struct Exit<S: Copy + Send + Sync + 'static> {
-    pub entity: Entity,
-    pub state: S,
-}
-
-impl<S: Copy + Send + Sync + 'static> EntityEvent for Exit<S> {
-    fn event_target(&self) -> Entity {
-        self.entity
-    }
+/// Anything [`Enter`] and [`Exit`] can be keyed by: an FSM enum (every variant) or one
+/// of its variant markers (that variant only).
+///
+/// Implemented by `#[derive(FSMState)]`; there is no reason to implement it by hand.
+pub trait FSMKey: Send + Sync + 'static {
+    /// The FSM this key belongs to.
+    type Fsm: FSMState;
+    /// The component an observer of this key is registered under; `()` for the whole FSM.
+    type Components: Bundle;
 }
 
 /// Event fired when an entity enters a state.
-#[derive(Event, Debug, Clone, Copy)]
-pub struct Enter<S: Copy + Send + Sync + 'static> {
+///
+/// Observe it through [`Enter`]: `On<Enter<life_fsm::Dying>>` for one variant,
+/// `On<Enter<LifeFSM>>` for all of them.
+#[derive(EntityEvent, Debug, Clone, Copy)]
+#[entity_event(trigger = EntityComponentsTrigger<'a>)]
+pub struct EnterEvent<S: FSMState> {
+    /// The entity whose state changed.
     pub entity: Entity,
+    /// The state entered.
     pub state: S,
+    /// The state left, or `None` when the FSM component was just added.
+    pub from: Option<S>,
 }
 
-impl<S: Copy + Send + Sync + 'static> EntityEvent for Enter<S> {
-    fn event_target(&self) -> Entity {
-        self.entity
-    }
-}
-
-/// Event fired for state transitions.
-#[derive(Event, Debug, Clone, Copy)]
-pub struct Transition<F, T>
-where
-    F: Copy + Send + Sync + 'static,
-    T: Copy + Send + Sync + 'static,
-{
+/// Event fired when an entity exits a state.
+///
+/// Observe it through [`Exit`]: `On<Exit<life_fsm::Alive>>` for one variant,
+/// `On<Exit<LifeFSM>>` for all of them.
+#[derive(EntityEvent, Debug, Clone, Copy)]
+#[entity_event(trigger = EntityComponentsTrigger<'a>)]
+pub struct ExitEvent<S: FSMState> {
+    /// The entity whose state changes.
     pub entity: Entity,
-    pub from: F,
-    pub to: T,
+    /// The state left.
+    pub state: S,
+    /// The state about to be entered.
+    pub to: S,
 }
 
-impl<F, T> EntityEvent for Transition<F, T>
-where
-    F: Copy + Send + Sync + 'static,
-    T: Copy + Send + Sync + 'static,
-{
-    fn event_target(&self) -> Entity {
-        self.entity
-    }
+/// Observer pattern for [`EnterEvent`], keyed by an FSM or one of its variant markers.
+///
+/// ```
+/// # use bevy::prelude::*;
+/// # use bevy_fsm::{FSMState, FSMTransition, Enter};
+/// # #[derive(Component, FSMTransition, FSMState, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// # #[component(immutable)]
+/// # enum LifeFSM { Alive, Dying }
+/// fn on_enter_dying(trigger: On<Enter<life_fsm::Dying>>) {
+///     assert_eq!(trigger.state, LifeFSM::Dying);
+/// }
+///
+/// fn on_any_enter(trigger: On<Enter<LifeFSM>>) {
+///     println!("{} entered {:?}", trigger.entity, trigger.state);
+/// }
+/// ```
+pub struct Enter<K: FSMKey>(PhantomData<fn() -> K>);
+
+impl<K: FSMKey> EventPattern for Enter<K> {
+    type Event = EnterEvent<K::Fsm>;
+    type Components = K::Components;
+}
+
+/// Observer pattern for [`ExitEvent`], keyed by an FSM or one of its variant markers.
+///
+/// See [`Enter`].
+pub struct Exit<K: FSMKey>(PhantomData<fn() -> K>);
+
+impl<K: FSMKey> EventPattern for Exit<K> {
+    type Event = ExitEvent<K::Fsm>;
+    type Components = K::Components;
 }
 
 /// Trait for defining transition logic.
@@ -320,37 +355,210 @@ pub trait FSMTransition {
     }
 }
 
-/// Core FSM trait implemented automatically by `#[derive(FSMState)]`.
+/// Core FSM trait, implemented by `#[derive(FSMState)]`.
 ///
-/// This trait provides the infrastructure for variant-specific event generation
-/// and state transition management.
-pub trait FSMState: Component + Copy + Eq + Send + Sync + 'static + FSMTransition {
-    /// Validate transition (delegated to `FSMTransition` impl).
-    fn can_transition(from: Self, to: Self) -> bool {
-        <Self as FSMTransition>::can_transition(from, to)
+/// The state is an immutable component: `&mut` access does not compile, so it only
+/// changes through [`StateChangeRequest`] (validated, fires events) or [`ResetState`].
+///
+/// ```compile_fail
+/// # use bevy::prelude::*;
+/// # use bevy_fsm::{FSMState, FSMTransition};
+/// # #[derive(Component, FSMTransition, FSMState, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// # #[component(immutable)]
+/// # enum LifeFSM { Alive, Dying }
+/// fn bypass(mut q: Query<&mut LifeFSM>) {
+///     for mut state in &mut q {
+///         *state = LifeFSM::Dying;
+///     }
+/// }
+/// # let mut app = App::new();
+/// # app.add_systems(Update, bypass);
+/// ```
+pub trait FSMState:
+    Component<Mutability = Immutable>
+    + FSMKey<Fsm = Self>
+    + FSMTransition
+    + Copy
+    + Eq
+    + core::hash::Hash
+    + Send
+    + Sync
+    + 'static
+{
+    /// Component id of this variant's marker type, the key its observers are registered under.
+    #[doc(hidden)]
+    fn variant_key(self, world: &mut World) -> ComponentId;
+}
+
+/// Why a [`StateChangeRequest`] was not applied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransitionError {
+    /// The entity does not exist or has no FSM component of this type.
+    NoState,
+    /// The entity is already in the requested state.
+    Unchanged,
+    /// The transition rules or the entity's [`FSMOverride`] forbid it.
+    Denied,
+}
+
+impl core::fmt::Display for TransitionError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::NoState => "entity has no state of this FSM",
+            Self::Unchanged => "entity is already in the requested state",
+            Self::Denied => "transition is not allowed",
+        })
     }
+}
 
-    /// Context-aware validation with world access.
-    fn can_transition_ctx(world: &World, entity: Entity, from: Self, to: Self) -> bool {
-        <Self as FSMTransition>::can_transition_ctx(world, entity, from, to)
+impl std::error::Error for TransitionError {}
+
+/// Command requesting a state change for an entity.
+///
+/// Queue it from any system with `commands.queue(StateChangeRequest { entity, next })`.
+/// When applied it validates the transition, fires [`Exit`] for the current state,
+/// writes the new state, then fires [`Enter`]. Rejected requests are dropped silently;
+/// use [`StateChangeRequest::try_apply`] in exclusive code to get the outcome.
+///
+/// ```
+/// # use bevy::prelude::*;
+/// # use bevy_fsm::{FSMState, FSMTransition, StateChangeRequest, TransitionError};
+/// # #[derive(Component, FSMState, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// # #[component(immutable)]
+/// # enum LifeFSM { Alive, Dying }
+/// # impl FSMTransition for LifeFSM {
+/// #     fn can_transition(from: Self, to: Self) -> bool { from == LifeFSM::Alive }
+/// # }
+/// let mut world = World::new();
+/// let entity = world.spawn(LifeFSM::Alive).id();
+///
+/// let request = StateChangeRequest { entity, next: LifeFSM::Dying };
+/// assert_eq!(request.try_apply(&mut world), Ok(LifeFSM::Alive));
+///
+/// let back = StateChangeRequest { entity, next: LifeFSM::Alive };
+/// assert_eq!(back.try_apply(&mut world), Err(TransitionError::Denied));
+/// ```
+#[derive(Debug, Clone, Copy)]
+pub struct StateChangeRequest<S: FSMState> {
+    /// The entity whose state should change.
+    pub entity: Entity,
+    /// The requested state.
+    pub next: S,
+}
+
+impl<S: FSMState> StateChangeRequest<S> {
+    /// Applies the request immediately, returning the state that was left.
+    ///
+    /// Commands queued by [`Exit`] observers apply before the new state is written,
+    /// and everything queued along the way is flushed before this returns.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`TransitionError`] and changes nothing when the entity has no state,
+    /// is already in `next`, or the transition is not allowed.
+    pub fn try_apply(self, world: &mut World) -> Result<S, TransitionError> {
+        let Self { entity, next } = self;
+        let current = *world.get::<S>(entity).ok_or(TransitionError::NoState)?;
+        if current == next {
+            return Err(TransitionError::Unchanged);
+        }
+        if !is_transition_allowed(world, entity, current, next) {
+            return Err(TransitionError::Denied);
+        }
+
+        let exit_key = current.variant_key(world);
+        world.trigger_with(
+            ExitEvent {
+                entity,
+                state: current,
+                to: next,
+            },
+            keyed_trigger(&[exit_key]),
+        );
+        world.flush();
+
+        // An Exit observer may have despawned the entity or removed its state.
+        let Ok(mut entity_mut) = world.get_entity_mut(entity) else {
+            return Ok(current);
+        };
+        if !entity_mut.contains::<S>() {
+            return Ok(current);
+        }
+        entity_mut.insert(next);
+        world.flush();
+
+        trigger_enter(world, entity, next, Some(current));
+        world.flush();
+        Ok(current)
     }
+}
 
-    /// Fire variant-specific enter event (generated by derive macro).
-    #[inline]
-    fn trigger_enter_variant(_commands: &mut Commands, _entity: Entity, _state: Self) {}
+impl<S: FSMState> Command for StateChangeRequest<S> {
+    type Out = ();
 
-    /// Fire variant-specific exit event (generated by derive macro).
-    #[inline]
-    fn trigger_exit_variant(_commands: &mut Commands, _entity: Entity, _state: Self) {}
+    fn apply(self, world: &mut World) {
+        // A rejected request is an expected outcome, not an error.
+        let _ = self.try_apply(world);
+    }
+}
 
-    /// Fire variant-specific transition event (generated by derive macro).
-    #[inline]
-    fn trigger_transition_variant(
-        _commands: &mut Commands,
-        _entity: Entity,
-        _from: Self,
-        _to: Self,
-    ) {
+/// Command that overwrites an entity's state without validation and without firing
+/// [`Enter`] or [`Exit`].
+///
+/// For re-initialising pooled or recycled entities, where the old state's history
+/// does not apply. Does nothing if the entity has no state of this FSM.
+#[derive(Debug, Clone, Copy)]
+pub struct ResetState<S: FSMState> {
+    /// The entity whose state is overwritten.
+    pub entity: Entity,
+    /// The new state.
+    pub state: S,
+}
+
+impl<S: FSMState> Command for ResetState<S> {
+    type Out = ();
+
+    fn apply(self, world: &mut World) {
+        if let Ok(mut entity_mut) = world.get_entity_mut(self.entity)
+            && entity_mut.contains::<S>()
+        {
+            entity_mut.insert(self.state);
+        }
+    }
+}
+
+fn keyed_trigger(components: &[ComponentId]) -> EntityComponentsTrigger<'_> {
+    EntityComponentsTrigger {
+        components,
+        old_archetype: None,
+        new_archetype: None,
+    }
+}
+
+fn trigger_enter<S: FSMState>(world: &mut World, entity: Entity, state: S, from: Option<S>) {
+    let enter_key = state.variant_key(world);
+    world.trigger_with(
+        EnterEvent {
+            entity,
+            state,
+            from,
+        },
+        keyed_trigger(&[enter_key]),
+    );
+}
+
+/// Decides a transition from the entity's [`FSMOverride`], falling back to [`FSMTransition`].
+fn is_transition_allowed<S: FSMState>(world: &World, entity: Entity, from: S, to: S) -> bool {
+    let rules = || <S as FSMTransition>::can_transition_ctx(world, entity, from, to);
+    let Some(cfg) = world.get::<FSMOverride<S>>(entity) else {
+        return rules();
+    };
+    let listed = cfg.transitions.contains(&(from, to));
+    match cfg.mode {
+        RuleType::All => !cfg.call_rules || rules(),
+        RuleType::None => false,
+        RuleType::Whitelist => listed || (cfg.call_rules && rules()),
+        RuleType::Blacklist => !listed && (!cfg.call_rules || rules()),
     }
 }
 
@@ -669,9 +877,10 @@ where
     }
 }
 
-/// Observer that triggers enter events when an FSM component is first added.
+/// Observer that fires [`Enter`] for the initial state when an FSM component is first added.
 ///
-/// **Note**: This is automatically registered when using `FSMPlugin` (recommended).
+/// The event's `from` is `None`. Registered by [`FSMPlugin`] unless
+/// [`FSMPlugin::ignore_fsm_addition`] is set.
 ///
 /// # Important Timing Considerations
 ///
@@ -690,22 +899,18 @@ where
 /// # Example
 /// ```
 /// # use bevy::prelude::*;
-/// # use bevy_fsm::{FSMState, FSMTransition, on_fsm_added, Enter};
+/// # use bevy_fsm::{FSMState, FSMTransition, Enter};
 /// # #[derive(Component)]
 /// # struct HealthBar;
-/// # impl Default for HealthBar { fn default() -> Self { Self } }
-/// # #[derive(Component, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// # #[derive(Component, FSMTransition, FSMState, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// # #[component(immutable)]
 /// # enum LifeFSM { Alive }
-/// # impl FSMState for LifeFSM {}
-/// # impl FSMTransition for LifeFSM {
-/// #     fn can_transition(_: Self, _: Self) -> bool { true }
-/// # }
 /// fn on_alive_enter(
-///     trigger: On<Enter<LifeFSM>>,
+///     trigger: On<Enter<life_fsm::Alive>>,
 ///     mut commands: Commands,
 /// ) {
 ///     // SAFE: Queue command for later execution
-///     commands.entity(trigger.entity).insert(HealthBar::default());
+///     commands.entity(trigger.entity).insert(HealthBar);
 ///
 ///     // UNSAFE: Don't query other components - they may not exist yet!
 ///     // let health = query.get(trigger.entity).unwrap(); // May panic!
@@ -717,139 +922,24 @@ where
 /// # use bevy::prelude::*;
 /// # use bevy_fsm::{FSMState, FSMTransition, on_fsm_added};
 /// # #[derive(Component, FSMTransition, FSMState, Reflect, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// # #[component(immutable)]
 /// # enum YourFSM { StateA }
 /// # let mut app = App::new();
 /// app.world_mut().add_observer(on_fsm_added::<YourFSM>);
 /// ```
-#[allow(clippy::needless_pass_by_value)]
 pub fn on_fsm_added<S: FSMState>(trigger: On<Add<S>>, mut commands: Commands, q_state: Query<&S>) {
     let entity = trigger.entity;
-
     let Ok(&state) = q_state.get(entity) else {
         return;
     };
-
-    // Fire enter events for initial state
-    commands.trigger(Enter::<S> { entity, state });
-    S::trigger_enter_variant(&mut commands, entity, state);
-}
-
-/// Observer that applies state change requests.
-///
-/// For manual registration:
-/// ```
-/// # use bevy::prelude::*;
-/// # use bevy_fsm::{FSMState, FSMTransition, apply_state_request};
-/// # #[derive(Component, FSMTransition, FSMState, Reflect, Clone, Copy, Debug, PartialEq, Eq, Hash)]
-/// # enum YourFSM { StateA }
-/// # let mut app = App::new();
-/// app.world_mut().add_observer(apply_state_request::<YourFSM>);
-/// ```
-///
-/// Gracefully handles entities that may have been despawned or had their FSM
-/// component removed by using a query to check component existence.
-#[allow(clippy::needless_pass_by_value)]
-pub fn apply_state_request<S: FSMState + core::hash::Hash>(
-    trigger: On<StateChangeRequest<S>>,
-    mut commands: Commands,
-    world: &World,
-    q_state: Query<&S>,
-) {
-    let entity = trigger.event().entity;
-
-    // Query fails gracefully if entity was despawned or component removed
-    let current = q_state.get(entity).ok().copied();
-
-    if let Some(cur) = current {
-        let next = trigger.event().next;
-        if cur == next {
-            return;
-        }
-
-        // Validation flow with priority model:
-        // FSMOverride (if present) has priority - it can force accept or force deny
-        // FSMTransition rules only apply to transitions NOT decided by FSMOverride
-        if let Some(cfg) = world.get::<FSMOverride<S>>(entity) {
-            let in_set = cfg.transitions.contains(&(cur, next));
-
-            match cfg.mode {
-                RuleType::All => {
-                    // All mode: no config restrictions, optionally check rules
-                    if cfg.call_rules
-                        && !<S as FSMState>::can_transition_ctx(world, entity, cur, next)
-                    {
-                        return;
-                    }
-                }
-                RuleType::None => {
-                    // None mode: deny everything
-                    return;
-                }
-                RuleType::Whitelist => {
-                    if in_set {
-                        // ON whitelist: ACCEPT immediately (whitelist wins)
-                        // Don't check FSMTransition - whitelist has priority
-                    } else {
-                        // NOT on whitelist: check rules if enabled, otherwise deny
-                        if cfg.call_rules {
-                            if !<S as FSMState>::can_transition_ctx(world, entity, cur, next) {
-                                return;
-                            }
-                        } else {
-                            // Not on whitelist and no rules checking: deny
-                            return;
-                        }
-                    }
-                }
-                RuleType::Blacklist => {
-                    if in_set {
-                        // ON blacklist: DENY immediately (blacklist wins)
-                        return;
-                    }
-                    // NOT on blacklist: check rules if enabled
-                    if cfg.call_rules
-                        && !<S as FSMState>::can_transition_ctx(world, entity, cur, next)
-                    {
-                        return;
-                    }
-                }
-            }
-        } else {
-            // No FSMOverride - fall back to type-level FSMTransition validation
-            if !<S as FSMState>::can_transition_ctx(world, entity, cur, next) {
-                return;
-            }
-        }
-
-        // Fire exit
-        commands.trigger(Exit::<S> { entity, state: cur });
-        S::trigger_exit_variant(&mut commands, entity, cur);
-
-        // Fire transition
-        commands.trigger(Transition::<S, S> {
-            entity,
-            from: cur,
-            to: next,
-        });
-        S::trigger_transition_variant(&mut commands, entity, cur, next);
-
-        // Apply new state
-        commands.entity(entity).insert(next);
-
-        // Fire enter
-        commands.trigger(Enter::<S> {
-            entity,
-            state: next,
-        });
-        S::trigger_enter_variant(&mut commands, entity, next);
-    }
+    commands.queue(move |world: &mut World| trigger_enter(world, entity, state, None));
 }
 
 /// Generic plugin for FSM types that automatically sets up core observers.
 ///
-/// This plugin automatically registers:
-/// - `apply_state_request` - Handles state transition requests
-/// - `on_fsm_added` - Fires Enter events when FSM component is first added
+/// This plugin registers the state type for reflection, creates the FSM's observer
+/// group, and adds [`on_fsm_added`], which fires Enter events when the FSM component
+/// is first added. Transitions need no observer: [`StateChangeRequest`] is a command.
 ///
 /// # Timing Warning
 ///
@@ -860,6 +950,7 @@ pub fn apply_state_request<S: FSMState + core::hash::Hash>(
 /// # use bevy::prelude::*;
 /// # use bevy_fsm::{FSMState, FSMTransition, FSMPlugin, fsm_observer, Enter};
 /// # #[derive(Component, FSMTransition, FSMState, Reflect, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// # #[component(immutable)]
 /// # enum LifeFSM { Alive, Dying }
 /// # fn on_dying_observer(_: On<Enter<life_fsm::Dying>>) {}
 /// # let mut app = App::new();
@@ -868,22 +959,22 @@ pub fn apply_state_request<S: FSMState + core::hash::Hash>(
 /// // Register additional observers using fsm_observer! macro:
 /// fsm_observer!(app, LifeFSM, on_dying_observer);
 /// ```
-pub struct FSMPlugin<S: FSMState + core::hash::Hash> {
+pub struct FSMPlugin<S: FSMState> {
     /// If true, skip registering the `on_fsm_added` observer
     ignore_fsm_addition: bool,
-    _phantom: std::marker::PhantomData<S>,
+    _phantom: PhantomData<S>,
 }
 
-impl<S: FSMState + core::hash::Hash> Default for FSMPlugin<S> {
+impl<S: FSMState> Default for FSMPlugin<S> {
     fn default() -> Self {
         Self {
             ignore_fsm_addition: false,
-            _phantom: std::marker::PhantomData,
+            _phantom: PhantomData,
         }
     }
 }
 
-impl<S: FSMState + core::hash::Hash> FSMPlugin<S> {
+impl<S: FSMState> FSMPlugin<S> {
     /// Create a new `FSMPlugin` with default settings.
     #[must_use]
     pub fn new() -> Self {
@@ -900,32 +991,19 @@ impl<S: FSMState + core::hash::Hash> FSMPlugin<S> {
     }
 }
 
-impl<S: FSMState + core::hash::Hash + Reflect + GetTypeRegistration> Plugin for FSMPlugin<S> {
+impl<S: FSMState + Reflect + GetTypeRegistration> Plugin for FSMPlugin<S> {
     fn build(&self, app: &mut App) {
-        // Register the FSM type for reflection
         app.register_type::<S>();
-        {
-            let world = app.world_mut();
-            let group_entity = ensure_fsm_group::<S>(world);
-
-            // Register core observers under the group entity
-            let apply_entity = {
-                let mut observer = world.add_observer(apply_state_request::<S>);
-                observer.insert(Name::new("apply_state_request"));
+        let world = app.world_mut();
+        let group_entity = ensure_fsm_group::<S>(world);
+        if !self.ignore_fsm_addition {
+            let added_entity = {
+                let mut observer = world.add_observer(on_fsm_added::<S>);
+                observer.insert(Name::new("on_fsm_added"));
                 observer.insert(FSMObserverMarker::<S>::default());
                 observer.id()
             };
-            world.entity_mut(group_entity).add_child(apply_entity);
-
-            if !self.ignore_fsm_addition {
-                let added_entity = {
-                    let mut observer = world.add_observer(on_fsm_added::<S>);
-                    observer.insert(Name::new("on_fsm_added"));
-                    observer.insert(FSMObserverMarker::<S>::default());
-                    observer.id()
-                };
-                world.entity_mut(group_entity).add_child(added_entity);
-            }
+            world.entity_mut(group_entity).add_child(added_entity);
         }
     }
 }
@@ -1007,14 +1085,14 @@ where
 mod tests {
     use super::*;
 
-    #[derive(Component, Clone, Copy, Debug, Hash, PartialEq, Eq)]
+    #[derive(Component, FSMState, Reflect, Clone, Copy, Debug, Hash, PartialEq, Eq)]
+    #[component(immutable)]
+    #[reflect(Component)]
     enum TestState {
         A,
         B,
         C,
     }
-
-    impl FSMState for TestState {}
 
     impl FSMTransition for TestState {
         fn can_transition(from: Self, to: Self) -> bool {
@@ -1024,158 +1102,276 @@ mod tests {
 
     #[derive(Resource, Default)]
     struct EventLog {
-        enters: Vec<TestState>,
-        exits: Vec<TestState>,
-        transitions: Vec<(TestState, TestState)>,
+        enters: Vec<(TestState, Option<TestState>)>,
+        exits: Vec<(TestState, TestState)>,
+        variant_enters_b: usize,
+        variant_exits_a: usize,
     }
 
-    #[allow(clippy::needless_pass_by_value)]
     fn on_enter(trigger: On<Enter<TestState>>, mut log: ResMut<EventLog>) {
-        log.enters.push(trigger.event().state);
+        log.enters.push((trigger.state, trigger.from));
     }
 
-    #[allow(clippy::needless_pass_by_value)]
     fn on_exit(trigger: On<Exit<TestState>>, mut log: ResMut<EventLog>) {
-        log.exits.push(trigger.event().state);
+        log.exits.push((trigger.state, trigger.to));
     }
 
-    #[allow(clippy::needless_pass_by_value)]
-    fn on_transition(trigger: On<Transition<TestState, TestState>>, mut log: ResMut<EventLog>) {
-        let event = trigger.event();
-        log.transitions.push((event.from, event.to));
+    fn on_enter_b(trigger: On<Enter<test_state::B>>, mut log: ResMut<EventLog>) {
+        assert_eq!(trigger.state, TestState::B);
+        log.variant_enters_b += 1;
+    }
+
+    fn on_exit_a(trigger: On<Exit<test_state::A>>, mut log: ResMut<EventLog>) {
+        assert_eq!(trigger.state, TestState::A);
+        log.variant_exits_a += 1;
+    }
+
+    fn test_app() -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.init_resource::<EventLog>();
+        app
+    }
+
+    fn request(app: &mut App, entity: Entity, next: TestState) {
+        app.world_mut()
+            .commands()
+            .queue(StateChangeRequest { entity, next });
+        app.update();
+    }
+
+    fn reset(app: &mut App, entity: Entity, state: TestState) {
+        app.world_mut()
+            .commands()
+            .queue(ResetState { entity, state });
+        app.update();
+    }
+
+    fn state(app: &App, entity: Entity) -> TestState {
+        *app.world().get::<TestState>(entity).unwrap()
     }
 
     #[test]
     fn transitions_apply_and_fire_events() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.init_resource::<EventLog>();
-        app.world_mut()
-            .add_observer(apply_state_request::<TestState>);
-        app.world_mut().add_observer(on_enter);
-        app.world_mut().add_observer(on_exit);
+        let mut app = test_app();
+        app.add_observer(on_enter);
+        app.add_observer(on_exit);
 
         let e = app.world_mut().spawn(TestState::A).id();
+        request(&mut app, e, TestState::B);
 
-        app.world_mut()
-            .commands()
-            .trigger(StateChangeRequest::<TestState> {
-                entity: e,
-                next: TestState::B,
-            });
+        assert_eq!(state(&app, e), TestState::B);
+        let log = app.world().resource::<EventLog>();
+        assert_eq!(log.exits, vec![(TestState::A, TestState::B)]);
+        assert_eq!(log.enters, vec![(TestState::B, Some(TestState::A))]);
+    }
 
+    #[test]
+    fn variant_observers_fire_only_for_their_variant() {
+        let mut app = test_app();
+        app.add_observer(on_enter_b);
+        app.add_observer(on_exit_a);
+
+        let e = app.world_mut().spawn(TestState::A).id();
+        request(&mut app, e, TestState::B);
+        request(&mut app, e, TestState::C);
+        request(&mut app, e, TestState::B);
+
+        let log = app.world().resource::<EventLog>();
+        assert_eq!(log.variant_enters_b, 2);
+        assert_eq!(log.variant_exits_a, 1);
+    }
+
+    #[test]
+    fn variant_markers_of_different_fsms_do_not_cross_fire() {
+        let mut app = test_app();
+        app.add_observer(on_enter_b);
+
+        let e = app.world_mut().spawn((TestState::A, SecondFSM::X)).id();
+        app.world_mut().commands().queue(StateChangeRequest {
+            entity: e,
+            next: SecondFSM::Y,
+        });
         app.update();
 
-        assert_eq!(*app.world().get::<TestState>(e).unwrap(), TestState::B);
-        let log = app.world().resource::<EventLog>();
-        assert_eq!(log.exits, vec![TestState::A]);
-        assert_eq!(log.enters, vec![TestState::B]);
+        assert_eq!(app.world().resource::<EventLog>().variant_enters_b, 0);
+    }
+
+    #[test]
+    fn exit_sees_old_state_and_enter_sees_new_state() {
+        #[derive(Resource, Default)]
+        struct Seen(Vec<TestState>);
+
+        let mut app = test_app();
+        app.init_resource::<Seen>();
+        app.add_observer(
+            |trigger: On<Exit<test_state::A>>, q: Query<&TestState>, mut seen: ResMut<Seen>| {
+                seen.0.push(*q.get(trigger.entity).unwrap());
+            },
+        );
+        app.add_observer(
+            |trigger: On<Enter<test_state::B>>, q: Query<&TestState>, mut seen: ResMut<Seen>| {
+                seen.0.push(*q.get(trigger.entity).unwrap());
+            },
+        );
+
+        let e = app.world_mut().spawn(TestState::A).id();
+        request(&mut app, e, TestState::B);
+
+        assert_eq!(
+            app.world().resource::<Seen>().0,
+            vec![TestState::A, TestState::B]
+        );
+    }
+
+    #[test]
+    fn exit_observer_commands_apply_before_enter() {
+        #[derive(Component)]
+        struct LeftA;
+
+        #[derive(Resource, Default)]
+        struct SawLeftA(bool);
+
+        let mut app = test_app();
+        app.init_resource::<SawLeftA>();
+        app.add_observer(|trigger: On<Exit<test_state::A>>, mut commands: Commands| {
+            commands.entity(trigger.entity).insert(LeftA);
+        });
+        app.add_observer(
+            |trigger: On<Enter<test_state::B>>,
+             q: Query<(), With<LeftA>>,
+             mut saw: ResMut<SawLeftA>| {
+                saw.0 = q.contains(trigger.entity);
+            },
+        );
+
+        let e = app.world_mut().spawn(TestState::A).id();
+        request(&mut app, e, TestState::B);
+
+        assert!(app.world().resource::<SawLeftA>().0);
+    }
+
+    #[test]
+    fn exit_observer_removing_state_stops_the_transition() {
+        let mut app = test_app();
+        app.add_observer(on_enter);
+        app.add_observer(|trigger: On<Exit<test_state::A>>, mut commands: Commands| {
+            commands.entity(trigger.entity).remove::<TestState>();
+        });
+
+        let e = app.world_mut().spawn(TestState::A).id();
+        request(&mut app, e, TestState::B);
+
+        assert!(app.world().get::<TestState>(e).is_none());
+        assert!(app.world().resource::<EventLog>().enters.is_empty());
     }
 
     #[test]
     fn guard_blocks_invalid_transitions() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.init_resource::<EventLog>();
-        app.world_mut()
-            .add_observer(apply_state_request::<TestState>);
+        let mut app = test_app();
+        app.add_observer(on_exit);
 
         let e = app.world_mut().spawn(TestState::A).id();
+        request(&mut app, e, TestState::C);
 
-        app.world_mut()
-            .commands()
-            .trigger(StateChangeRequest::<TestState> {
-                entity: e,
-                next: TestState::C,
-            });
-
-        app.update();
-
-        assert_eq!(*app.world().get::<TestState>(e).unwrap(), TestState::A);
+        assert_eq!(state(&app, e), TestState::A);
+        assert!(app.world().resource::<EventLog>().exits.is_empty());
     }
 
     #[test]
-    fn generic_transition_events_fire() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.init_resource::<EventLog>();
-        app.world_mut()
-            .add_observer(apply_state_request::<TestState>);
-        app.world_mut().add_observer(on_transition);
+    fn try_apply_reports_the_outcome() {
+        let mut world = World::new();
+        let e = world.spawn(TestState::A).id();
+        let missing = world.spawn_empty().id();
 
-        let e = app.world_mut().spawn(TestState::A).id();
-
-        // Transition A -> B
-        app.world_mut()
-            .commands()
-            .trigger(StateChangeRequest::<TestState> {
+        assert_eq!(
+            StateChangeRequest {
                 entity: e,
-                next: TestState::B,
-            });
-        app.update();
+                next: TestState::A
+            }
+            .try_apply(&mut world),
+            Err(TransitionError::Unchanged)
+        );
+        assert_eq!(
+            StateChangeRequest {
+                entity: e,
+                next: TestState::C
+            }
+            .try_apply(&mut world),
+            Err(TransitionError::Denied)
+        );
+        assert_eq!(
+            StateChangeRequest {
+                entity: missing,
+                next: TestState::B
+            }
+            .try_apply(&mut world),
+            Err(TransitionError::NoState)
+        );
+        assert_eq!(
+            StateChangeRequest {
+                entity: e,
+                next: TestState::B
+            }
+            .try_apply(&mut world),
+            Ok(TestState::A)
+        );
+        assert_eq!(*world.get::<TestState>(e).unwrap(), TestState::B);
+    }
 
+    #[test]
+    fn reset_state_skips_rules_and_events() {
+        let mut app = test_app();
+        app.add_observer(on_enter);
+        app.add_observer(on_exit);
+
+        let e = app
+            .world_mut()
+            .spawn((TestState::A, FSMOverride::<TestState>::deny_all()))
+            .id();
+        reset(&mut app, e, TestState::C);
+
+        assert_eq!(state(&app, e), TestState::C);
         let log = app.world().resource::<EventLog>();
-        assert_eq!(log.transitions, vec![(TestState::A, TestState::B)]);
+        assert!(log.enters.is_empty());
+        assert!(log.exits.is_empty());
+    }
+
+    #[test]
+    fn reset_state_ignores_entities_without_state() {
+        let mut app = test_app();
+        let e = app.world_mut().spawn_empty().id();
+        reset(&mut app, e, TestState::B);
+        assert!(app.world().get::<TestState>(e).is_none());
     }
 
     #[test]
     fn on_fsm_added_fires_initial_enter_events() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.init_resource::<EventLog>();
-        app.world_mut()
-            .add_observer(apply_state_request::<TestState>);
-        app.world_mut().add_observer(on_fsm_added::<TestState>);
-        app.world_mut().add_observer(on_enter);
+        let mut app = test_app();
+        app.add_observer(on_fsm_added::<TestState>);
+        app.add_observer(on_enter);
+        app.add_observer(
+            |trigger: On<Enter<test_state::A>>, mut log: ResMut<EventLog>| {
+                assert_eq!(trigger.from, None);
+                log.variant_exits_a += 1;
+            },
+        );
 
-        let _e = app.world_mut().spawn(TestState::A).id();
+        app.world_mut().spawn(TestState::A);
         app.update();
 
         let log = app.world().resource::<EventLog>();
-        assert_eq!(log.enters, vec![TestState::A]);
-    }
-
-    // Additional tests without variant-specific events (to avoid proc macro issues in test modules)
-    #[test]
-    fn fsm_plugin_registers_core_observers_with_teststate() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.init_resource::<EventLog>();
-        // Note: TestState doesn't have FSMState derive, so can't use FSMPlugin
-        // This tests the manual approach still works
-        app.world_mut()
-            .add_observer(apply_state_request::<TestState>);
-        app.world_mut().add_observer(on_fsm_added::<TestState>);
-        app.world_mut().add_observer(on_enter);
-
-        let e = app.world_mut().spawn(TestState::A).id();
-        app.update();
-
-        // Verify on_fsm_added was registered
-        let log = app.world().resource::<EventLog>();
-        assert_eq!(log.enters, vec![TestState::A]);
-
-        // Verify apply_state_request was registered
-        app.world_mut()
-            .commands()
-            .trigger(StateChangeRequest::<TestState> {
-                entity: e,
-                next: TestState::B,
-            });
-        app.update();
-
-        assert_eq!(*app.world().get::<TestState>(e).unwrap(), TestState::B);
+        assert_eq!(log.enters, vec![(TestState::A, None)]);
+        assert_eq!(
+            log.variant_exits_a, 1,
+            "variant observer sees the initial enter"
+        );
     }
 
     #[test]
     fn fsm_observer_macro_registers_and_organizes() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.init_resource::<EventLog>();
-        app.world_mut()
-            .add_observer(apply_state_request::<TestState>);
+        let mut app = test_app();
 
-        // The macro should register the observer and parent it automatically.
         let observer_entity = fsm_observer!(app, TestState, on_enter).id();
 
         let world = app.world();
@@ -1191,21 +1387,13 @@ mod tests {
             "observer should carry the FSM marker"
         );
 
-        // The registered observer must actually fire.
         let e = app.world_mut().spawn(TestState::A).id();
-        app.world_mut()
-            .commands()
-            .trigger(StateChangeRequest::<TestState> {
-                entity: e,
-                next: TestState::B,
-            });
-        app.update();
+        request(&mut app, e, TestState::B);
         assert_eq!(
             app.world().resource::<EventLog>().enters,
-            vec![TestState::B]
+            vec![(TestState::B, Some(TestState::A))]
         );
 
-        // Hierarchy: FSMObservers root -> TestState group -> observer.
         let root = {
             let mut query = app
                 .world_mut()
@@ -1238,12 +1426,7 @@ mod tests {
 
     #[test]
     fn fsm_config_whitelist_mode() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.world_mut()
-            .add_observer(apply_state_request::<TestState>);
-
-        // Whitelist A->C (which FSMTransition normally forbids)
+        let mut app = test_app();
         let e = app
             .world_mut()
             .spawn((
@@ -1255,29 +1438,13 @@ mod tests {
             ))
             .id();
 
-        // Whitelisted transition should succeed
-        app.world_mut()
-            .commands()
-            .trigger(StateChangeRequest::<TestState> {
-                entity: e,
-                next: TestState::B,
-            });
-        app.update();
-        assert_eq!(*app.world().get::<TestState>(e).unwrap(), TestState::B);
+        request(&mut app, e, TestState::B);
+        assert_eq!(state(&app, e), TestState::B);
 
-        // Reset to A
-        app.world_mut().entity_mut(e).insert(TestState::A);
-
-        // A->C is whitelisted, should succeed even though FSMTransition would block it
-        app.world_mut()
-            .commands()
-            .trigger(StateChangeRequest::<TestState> {
-                entity: e,
-                next: TestState::C,
-            });
-        app.update();
+        reset(&mut app, e, TestState::A);
+        request(&mut app, e, TestState::C);
         assert_eq!(
-            *app.world().get::<TestState>(e).unwrap(),
+            state(&app, e),
             TestState::C,
             "Whitelist should override FSMTransition when call_rules is false"
         );
@@ -1285,12 +1452,7 @@ mod tests {
 
     #[test]
     fn fsm_config_whitelist_with_rules() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.world_mut()
-            .add_observer(apply_state_request::<TestState>);
-
-        // Whitelist A->C (overrides FSMTransition), with_rules checks others
+        let mut app = test_app();
         let e = app
             .world_mut()
             .spawn((
@@ -1302,47 +1464,24 @@ mod tests {
             ))
             .id();
 
-        // A->C: ON whitelist, should ACCEPT (config wins, FSMTransition NOT checked)
-        app.world_mut()
-            .commands()
-            .trigger(StateChangeRequest::<TestState> {
-                entity: e,
-                next: TestState::C,
-            });
-        app.update();
+        request(&mut app, e, TestState::C);
         assert_eq!(
-            *app.world().get::<TestState>(e).unwrap(),
+            state(&app, e),
             TestState::C,
             "Whitelisted transition should accept regardless of FSMTransition"
         );
 
-        // Reset to A
-        app.world_mut().entity_mut(e).insert(TestState::A);
-
-        // A->B: NOT on whitelist, check FSMTransition (allows it)
-        app.world_mut()
-            .commands()
-            .trigger(StateChangeRequest::<TestState> {
-                entity: e,
-                next: TestState::B,
-            });
-        app.update();
+        reset(&mut app, e, TestState::A);
+        request(&mut app, e, TestState::B);
         assert_eq!(
-            *app.world().get::<TestState>(e).unwrap(),
+            state(&app, e),
             TestState::B,
             "Non-whitelisted but FSMTransition-valid transition should succeed with with_rules"
         );
 
-        // B->C: NOT on whitelist, check FSMTransition (allows it)
-        app.world_mut()
-            .commands()
-            .trigger(StateChangeRequest::<TestState> {
-                entity: e,
-                next: TestState::C,
-            });
-        app.update();
+        request(&mut app, e, TestState::C);
         assert_eq!(
-            *app.world().get::<TestState>(e).unwrap(),
+            state(&app, e),
             TestState::C,
             "Non-whitelisted transition should defer to FSMTransition when with_rules enabled"
         );
@@ -1350,11 +1489,7 @@ mod tests {
 
     #[test]
     fn fsm_config_blacklist_mode() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.world_mut()
-            .add_observer(apply_state_request::<TestState>);
-
+        let mut app = test_app();
         let e = app
             .world_mut()
             .spawn((
@@ -1364,28 +1499,13 @@ mod tests {
             .id();
 
         // Non-blacklisted transition should succeed (even if FSMTransition would block it)
-        app.world_mut()
-            .commands()
-            .trigger(StateChangeRequest::<TestState> {
-                entity: e,
-                next: TestState::B,
-            });
-        app.update();
-        assert_eq!(*app.world().get::<TestState>(e).unwrap(), TestState::B);
+        request(&mut app, e, TestState::B);
+        assert_eq!(state(&app, e), TestState::B);
 
-        // Reset to A
-        app.world_mut().entity_mut(e).insert(TestState::A);
-
-        // Blacklisted transition should fail
-        app.world_mut()
-            .commands()
-            .trigger(StateChangeRequest::<TestState> {
-                entity: e,
-                next: TestState::C,
-            });
-        app.update();
+        reset(&mut app, e, TestState::A);
+        request(&mut app, e, TestState::C);
         assert_eq!(
-            *app.world().get::<TestState>(e).unwrap(),
+            state(&app, e),
             TestState::A,
             "Blacklisted transition should be denied"
         );
@@ -1393,11 +1513,7 @@ mod tests {
 
     #[test]
     fn fsm_config_blacklist_with_rules() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.world_mut()
-            .add_observer(apply_state_request::<TestState>);
-
+        let mut app = test_app();
         // Blacklist B->C, but A->C is also invalid per FSMTransition
         let e = app
             .world_mut()
@@ -1407,103 +1523,48 @@ mod tests {
             ))
             .id();
 
-        // A->C: not blacklisted, but FSMTransition blocks it
-        app.world_mut()
-            .commands()
-            .trigger(StateChangeRequest::<TestState> {
-                entity: e,
-                next: TestState::C,
-            });
-        app.update();
+        request(&mut app, e, TestState::C);
         assert_eq!(
-            *app.world().get::<TestState>(e).unwrap(),
+            state(&app, e),
             TestState::A,
             "FSMTransition should block A->C even though not blacklisted"
         );
 
-        // A->B: allowed by both blacklist and FSMTransition
-        app.world_mut()
-            .commands()
-            .trigger(StateChangeRequest::<TestState> {
-                entity: e,
-                next: TestState::B,
-            });
-        app.update();
-        assert_eq!(*app.world().get::<TestState>(e).unwrap(), TestState::B);
+        request(&mut app, e, TestState::B);
+        assert_eq!(state(&app, e), TestState::B);
 
-        // B->C: blacklisted, should fail even though FSMTransition would allow it
-        app.world_mut()
-            .commands()
-            .trigger(StateChangeRequest::<TestState> {
-                entity: e,
-                next: TestState::C,
-            });
-        app.update();
-        assert_eq!(
-            *app.world().get::<TestState>(e).unwrap(),
-            TestState::B,
-            "Blacklist should block B->C"
-        );
+        request(&mut app, e, TestState::C);
+        assert_eq!(state(&app, e), TestState::B, "Blacklist should block B->C");
     }
 
     #[test]
     fn fsm_config_deny_all_mode() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.world_mut()
-            .add_observer(apply_state_request::<TestState>);
-
+        let mut app = test_app();
         let e = app
             .world_mut()
             .spawn((TestState::A, FSMOverride::<TestState>::deny_all()))
             .id();
 
-        // All transitions should be denied
-        app.world_mut()
-            .commands()
-            .trigger(StateChangeRequest::<TestState> {
-                entity: e,
-                next: TestState::B,
-            });
-        app.update();
-        assert_eq!(*app.world().get::<TestState>(e).unwrap(), TestState::A);
+        request(&mut app, e, TestState::B);
+        assert_eq!(state(&app, e), TestState::A);
     }
 
     #[test]
     fn fsm_config_allow_all_mode() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.world_mut()
-            .add_observer(apply_state_request::<TestState>);
-
+        let mut app = test_app();
         let e = app
             .world_mut()
             .spawn((TestState::A, FSMOverride::<TestState>::allow_all()))
             .id();
 
-        // Without call_rules, FSMTransition is bypassed - ALL transitions allowed
-        app.world_mut()
-            .commands()
-            .trigger(StateChangeRequest::<TestState> {
-                entity: e,
-                next: TestState::B,
-            });
-        app.update();
-        assert_eq!(*app.world().get::<TestState>(e).unwrap(), TestState::B);
+        request(&mut app, e, TestState::B);
+        assert_eq!(state(&app, e), TestState::B);
 
-        // Reset to A
-        app.world_mut().entity_mut(e).insert(TestState::A);
-
+        reset(&mut app, e, TestState::A);
         // Even invalid transition (A->C) is allowed because FSMTransition is not checked
-        app.world_mut()
-            .commands()
-            .trigger(StateChangeRequest::<TestState> {
-                entity: e,
-                next: TestState::C,
-            });
-        app.update();
+        request(&mut app, e, TestState::C);
         assert_eq!(
-            *app.world().get::<TestState>(e).unwrap(),
+            state(&app, e),
             TestState::C,
             "allow_all without call_rules should bypass FSMTransition"
         );
@@ -1511,11 +1572,7 @@ mod tests {
 
     #[test]
     fn fsm_config_allow_all_with_rules() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.world_mut()
-            .add_observer(apply_state_request::<TestState>);
-
+        let mut app = test_app();
         let e = app
             .world_mut()
             .spawn((
@@ -1524,44 +1581,27 @@ mod tests {
             ))
             .id();
 
-        // Valid transition should succeed
-        app.world_mut()
-            .commands()
-            .trigger(StateChangeRequest::<TestState> {
-                entity: e,
-                next: TestState::B,
-            });
-        app.update();
-        assert_eq!(*app.world().get::<TestState>(e).unwrap(), TestState::B);
+        request(&mut app, e, TestState::B);
+        assert_eq!(state(&app, e), TestState::B);
 
-        // Reset to A
-        app.world_mut().entity_mut(e).insert(TestState::A);
-
-        // Invalid transition (A->C) should be blocked by FSMTransition
-        app.world_mut()
-            .commands()
-            .trigger(StateChangeRequest::<TestState> {
-                entity: e,
-                next: TestState::C,
-            });
-        app.update();
+        reset(&mut app, e, TestState::A);
+        request(&mut app, e, TestState::C);
         assert_eq!(
-            *app.world().get::<TestState>(e).unwrap(),
+            state(&app, e),
             TestState::A,
             "allow_all with call_rules should enforce FSMTransition"
         );
     }
 
     // Test with FSMPlugin using a real FSMState enum
-    #[derive(Component, Reflect, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+    #[derive(Component, FSMState, Reflect, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+    #[component(immutable)]
     #[reflect(Component)]
     enum PluginTestState {
         Initial,
         Active,
         Done,
     }
-
-    impl FSMState for PluginTestState {}
 
     impl FSMTransition for PluginTestState {
         fn can_transition(from: Self, to: Self) -> bool {
@@ -1578,7 +1618,6 @@ mod tests {
         enters: Vec<PluginTestState>,
     }
 
-    #[allow(clippy::needless_pass_by_value)]
     fn on_plugin_enter(trigger: On<Enter<PluginTestState>>, mut log: ResMut<PluginEventLog>) {
         log.enters.push(trigger.event().state);
     }
@@ -1588,169 +1627,103 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.init_resource::<PluginEventLog>();
-
-        // Use FSMPlugin to register observers automatically
         app.add_plugins(FSMPlugin::<PluginTestState>::default());
-
-        // Register observer to track Enter events
         app.world_mut().add_observer(on_plugin_enter);
 
-        // Spawn entity with initial state
         let entity = app.world_mut().spawn(PluginTestState::Initial).id();
-
-        // Update to process the on_fsm_added observer
         app.update();
 
-        // Verify that Enter event was fired for initial state
-        let log = app.world().resource::<PluginEventLog>();
         assert_eq!(
-            log.enters,
+            app.world().resource::<PluginEventLog>().enters,
             vec![PluginTestState::Initial],
             "FSMPlugin should fire Enter event for initial state when entity is spawned"
         );
 
-        // Verify that state transitions still work
-        app.world_mut()
-            .commands()
-            .trigger(StateChangeRequest::<PluginTestState> {
-                entity,
-                next: PluginTestState::Active,
-            });
+        app.world_mut().commands().queue(StateChangeRequest {
+            entity,
+            next: PluginTestState::Active,
+        });
         app.update();
 
         assert_eq!(
             *app.world().get::<PluginTestState>(entity).unwrap(),
             PluginTestState::Active
         );
-
-        let log = app.world().resource::<PluginEventLog>();
         assert_eq!(
-            log.enters,
+            app.world().resource::<PluginEventLog>().enters,
             vec![PluginTestState::Initial, PluginTestState::Active],
             "FSMPlugin should fire Enter events for both initial state and transitions"
         );
     }
 
-    // -----------------------------------------------------------------------
-    // Bevy 0.18 -> 0.19 migration regression tests
-    //
-    // Upgrading to Bevy 0.19 required no source changes, but the migration
-    // reworked several subsystems this crate depends on. These tests pin down
-    // the behaviours that were "under suspicion" so a future Bevy bump cannot
-    // silently regress them:
-    //
-    // - "Lifecycle event changes" (`Replace` renamed to `Discard`) and the
-    //   reworked lifecycle observers: `on_fsm_added` listens on the `Add`
-    //   lifecycle event, which must stay *add-only* and never re-fire when a
-    //   transition re-inserts the state component (that is an Insert/Discard,
-    //   not an Add).
-    // - "SystemParam validation is now done when fetching the data":
-    //   `apply_state_request` must still gracefully ignore despawned entities
-    //   and removed components instead of panicking.
-    // - "Resources as Components" + the `bevy_reflect` reorg: the reflection
-    //   registration path (`register_type` / `GetTypeRegistration`) and the
-    //   resource-backed observer hierarchy must keep working.
-    // -----------------------------------------------------------------------
+    #[test]
+    fn fsm_plugin_ignore_fsm_addition_skips_initial_enter() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.init_resource::<PluginEventLog>();
+        app.add_plugins(FSMPlugin::<PluginTestState>::new().ignore_fsm_addition());
+        app.world_mut().add_observer(on_plugin_enter);
+
+        app.world_mut().spawn(PluginTestState::Initial);
+        app.update();
+
+        assert!(app.world().resource::<PluginEventLog>().enters.is_empty());
+    }
 
     /// A second reflectable FSM used to verify multiple `FSMPlugin`s share one
     /// hierarchy root.
-    #[derive(Component, Reflect, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+    #[derive(
+        Component, FSMState, FSMTransition, Reflect, Clone, Copy, Debug, PartialEq, Eq, Hash,
+    )]
+    #[component(immutable)]
     #[reflect(Component)]
     enum SecondFSM {
         X,
         Y,
     }
 
-    impl FSMState for SecondFSM {}
-
-    impl FSMTransition for SecondFSM {
-        fn can_transition(_from: Self, _to: Self) -> bool {
-            true
-        }
-    }
-
-    /// `On<Add<S>>` must be *add-only*: re-inserting the same state component
-    /// (exactly what `apply_state_request` does on every transition) must NOT
-    /// re-trigger `on_fsm_added`. Bevy 0.19's "Lifecycle event changes"
-    /// renamed `Replace` to `Discard`; this guards that `Add` still fires only
-    /// on first insertion, so the initial Enter event is never duplicated when
-    /// a transition re-inserts the component.
+    /// `On<Add<S>>` must be *add-only*: a transition re-inserts the state component
+    /// (an Insert/Discard, not an Add), so the initial Enter must not repeat.
     #[test]
     fn on_fsm_added_is_add_only_not_on_reinsert() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.init_resource::<EventLog>();
-        // Only the add-observer + enter logger; NO apply_state_request, so the
-        // only way `enters` can grow is `on_fsm_added` firing on an `Add`.
-        app.world_mut().add_observer(on_fsm_added::<TestState>);
-        app.world_mut().add_observer(on_enter);
+        let mut app = test_app();
+        app.add_observer(on_fsm_added::<TestState>);
+        app.add_observer(on_enter);
 
         let e = app.world_mut().spawn(TestState::A).id();
         app.update();
         assert_eq!(
             app.world().resource::<EventLog>().enters,
-            vec![TestState::A],
+            vec![(TestState::A, None)],
             "on_fsm_added should fire exactly one initial Enter on spawn"
         );
 
-        // Re-insert the component with a different value, exactly like a state
-        // transition does. This is an Insert/Discard, not an Add, so
-        // on_fsm_added must stay silent.
-        app.world_mut().entity_mut(e).insert(TestState::B);
-        app.update();
+        reset(&mut app, e, TestState::B);
         assert_eq!(
             app.world().resource::<EventLog>().enters,
-            vec![TestState::A],
+            vec![(TestState::A, None)],
             "On<Add> must not re-fire when the state component is re-inserted"
         );
     }
 
-    /// `apply_state_request` must not panic when the target entity has been
-    /// despawned. Bevy 0.19 moved system-param validation into the data-fetch
-    /// step; this guards that a request for a stale entity is a graceful no-op.
     #[test]
-    fn apply_state_request_ignores_despawned_entity() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.world_mut()
-            .add_observer(apply_state_request::<TestState>);
-
+    fn request_ignores_despawned_entity() {
+        let mut app = test_app();
         let e = app.world_mut().spawn(TestState::A).id();
         app.world_mut().entity_mut(e).despawn();
 
-        app.world_mut()
-            .commands()
-            .trigger(StateChangeRequest::<TestState> {
-                entity: e,
-                next: TestState::B,
-            });
-        app.update(); // must not panic
+        request(&mut app, e, TestState::B); // must not panic
 
-        assert!(
-            app.world().get_entity(e).is_err(),
-            "despawned entity should stay despawned"
-        );
+        assert!(app.world().get_entity(e).is_err());
     }
 
-    /// `apply_state_request` must not panic when the FSM component was removed
-    /// from an otherwise-live entity, and must leave it without a state.
     #[test]
-    fn apply_state_request_ignores_removed_component() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.world_mut()
-            .add_observer(apply_state_request::<TestState>);
-
+    fn request_ignores_removed_component() {
+        let mut app = test_app();
         let e = app.world_mut().spawn(TestState::A).id();
         app.world_mut().entity_mut(e).remove::<TestState>();
 
-        app.world_mut()
-            .commands()
-            .trigger(StateChangeRequest::<TestState> {
-                entity: e,
-                next: TestState::B,
-            });
-        app.update(); // must not panic
+        request(&mut app, e, TestState::B); // must not panic
 
         assert!(
             app.world().get::<TestState>(e).is_none(),
@@ -1758,9 +1731,6 @@ mod tests {
         );
     }
 
-    /// `FSMPlugin::build` calls `register_type::<S>()`. This verifies the
-    /// reflection registration path still works after the `bevy_reflect`
-    /// reorg / "Resources as Components" changes in 0.19.
     #[test]
     fn fsm_plugin_registers_type_for_reflection() {
         let mut app = App::new();
@@ -1774,10 +1744,6 @@ mod tests {
         );
     }
 
-    /// The observer hierarchy is backed by the `FSMObserverHierarchy` resource.
-    /// In 0.19 resources are also components ("Resources as Components"); this
-    /// verifies multiple `FSMPlugin`s still share a single root entity with one
-    /// group per FSM type.
     #[test]
     fn multiple_fsm_plugins_share_single_root() {
         let mut app = App::new();
@@ -1800,15 +1766,69 @@ mod tests {
         let mut g2 = app
             .world_mut()
             .query_filtered::<Entity, With<FSMObserverGroup<SecondFSM>>>();
-        assert_eq!(
-            g1.iter(app.world()).count(),
-            1,
-            "PluginTestState should have exactly one observer group"
+        assert_eq!(g1.iter(app.world()).count(), 1);
+        assert_eq!(g2.iter(app.world()).count(), 1);
+    }
+
+    mod visibility {
+        use super::*;
+
+        // Private enum: markers must be visible to this module without leaking it.
+        #[derive(Component, FSMState, FSMTransition, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+        #[component(immutable)]
+        enum PrivateFSM {
+            On,
+            Off,
+        }
+
+        #[derive(Component, FSMState, FSMTransition, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+        #[component(immutable)]
+        #[allow(dead_code)]
+        pub(crate) enum CrateFSM {
+            On,
+            Off,
+        }
+
+        mod nested {
+            use super::*;
+
+            #[derive(
+                Component, FSMState, FSMTransition, Clone, Copy, Debug, PartialEq, Eq, Hash,
+            )]
+            #[component(immutable)]
+            #[allow(dead_code)]
+            pub(super) enum ParentFSM {
+                On,
+                Off,
+            }
+        }
+
+        // Markers resolve wherever their enum is visible.
+        type _Markers = (
+            crate_fsm::On,
+            nested::parent_fsm::Off,
+            Enter<crate_fsm::Off>,
+            Exit<nested::parent_fsm::On>,
         );
-        assert_eq!(
-            g2.iter(app.world()).count(),
-            1,
-            "SecondFSM should have exactly one observer group"
-        );
+
+        #[test]
+        fn markers_of_private_enum_are_usable_next_to_it() {
+            #[derive(Resource, Default)]
+            struct Count(u32);
+
+            let mut world = World::new();
+            world.init_resource::<Count>();
+            world.add_observer(|_: On<Enter<private_fsm::Off>>, mut count: ResMut<Count>| {
+                count.0 += 1;
+            });
+            let e = world.spawn(PrivateFSM::On).id();
+            StateChangeRequest {
+                entity: e,
+                next: PrivateFSM::Off,
+            }
+            .try_apply(&mut world)
+            .unwrap();
+            assert_eq!(world.resource::<Count>().0, 1);
+        }
     }
 }

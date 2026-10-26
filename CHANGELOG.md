@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-25
+
+### Changed
+
+- **BREAKING**: The FSM enum must be an immutable component
+  (`#[component(immutable)]`); `#[derive(FSMState)]` enforces this at compile
+  time. `&mut` access to the state no longer compiles, so it only changes through
+  `StateChangeRequest` or `ResetState`.
+- **BREAKING**: `StateChangeRequest` is a `Command` instead of an event: queue it
+  with `commands.queue(StateChangeRequest { entity, next })`. The
+  `apply_state_request` observer is gone. `StateChangeRequest::try_apply(world)`
+  applies a request immediately and returns `Ok(previous)` or a `TransitionError`.
+- **BREAKING**: `Enter<K>` and `Exit<K>` are observer patterns over the new
+  `EnterEvent<S>` / `ExitEvent<S>` events. `K` is either the FSM enum (every
+  variant) or one of its variant markers (that variant only); observer signatures
+  such as `On<Enter<life_fsm::Dying>>` and `On<Enter<LifeFSM>>` are unchanged.
+  The event's `state` field is now always the FSM enum.
+- **BREAKING**: `ExitEvent` carries the destination (`to`) and `EnterEvent` the
+  origin (`from`, `None` for the initial state).
+- **BREAKING**: Removed `Transition<F, T>`. Observe `Exit` of the source variant
+  and check `to` instead.
+- **BREAKING**: `FSMState` requires `Hash` and can no longer be implemented by
+  hand (use the derive); its `trigger_*_variant` and `can_transition*` methods
+  were removed (`FSMTransition` keeps the rules). The derive rejects generic enums.
+- Each transition fires one `Exit` and one `Enter` event, routed by the variant
+  marker's component id, instead of six typed triggers, and no longer runs an
+  intermediate request observer. The derive no longer generates the N²
+  transition match: a test crate with one 18-variant FSM generates 2,886 instead
+  of 22,867 functions and rebuilds in 0.6 s instead of 2.5 s.
+- Variant markers are zero-sized components that cannot be constructed outside
+  their generated module, with the enum's visibility.
+
+### Added
+
+- `ResetState { entity, state }` command: overwrites the state without
+  validation and without events, for re-initialising pooled entities.
+- `TransitionError`, `FSMKey`, `EnterEvent`, `ExitEvent`.
+
+### Migration
+
+- Add `#[component(immutable)]` to every FSM enum.
+- `commands.trigger(StateChangeRequest { .. })` → `commands.queue(StateChangeRequest { .. })`.
+- `On<Transition<a::X, a::Y>>` → `On<Exit<a::X>>` with `if trigger.to == A::Y`.
+  `On<Transition<A, A>>` → `On<Exit<A>>` (`state` is the old value, `to` the new).
+- Code that wrote the state directly (`get_mut`, `Query<&mut S>`) must request
+  the transition or, to skip rules and events, queue `ResetState`.
+- Observers that listened to `On<StateChangeRequest<S>>` no longer receive
+  anything; observe `Exit`/`Enter` or check the resulting state.
+- Observers registered with `add_observer(apply_state_request::<S>)` in tests
+  can be dropped; `FSMPlugin` is no longer needed for transitions, only for the
+  initial `Enter`, reflection and the observer hierarchy.
+
 ## [0.6.0] - 2026-10-22
 
 ### Changed

@@ -35,6 +35,7 @@ fn main() {
 
 /// Game states shared with the `fully_connected` example.
 #[derive(Component, FSMState, Reflect, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[component(immutable)]
 #[reflect(Component)]
 enum GameState {
     MainMenu,
@@ -108,7 +109,7 @@ fn drive_state_transitions(
                 "  {}xpecting transition",
                 if allowed { "E" } else { "NOT e" }
             );
-            commands.trigger(StateChangeRequest {
+            commands.queue(StateChangeRequest {
                 entity,
                 next: target,
             });
