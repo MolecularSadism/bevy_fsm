@@ -10,8 +10,8 @@
 //! - **Enum-based states**: Keep your states as simple enum variants
 //! - **Observer-driven**: React to state changes via Bevy observers
 //! - **Variant-specific observers**: `On<Enter<life_fsm::Dying>>` runs only on entering `Dying`
-//! - **Enforced rules**: The state component is immutable, so it only changes through a
-//!   validated request
+//! - **Enforced rules**: The state component is immutable, so `&mut` access does not
+//!   compile; transitions go through a validated request
 //! - **Flexible validation**: Per-entity and per-type transition rules
 //! - **Minimal API**: `FSMPlugin` for automatic setup
 //! - **Organized hierarchy**: Observers automatically organized in entity hierarchy
@@ -358,8 +358,9 @@ pub trait FSMTransition {
 
 /// Core FSM trait, implemented by `#[derive(FSMState)]`.
 ///
-/// The state is an immutable component: `&mut` access does not compile, so it only
-/// changes through [`StateChangeRequest`] (validated, fires events) or [`ResetState`].
+/// The state is an immutable component: `&mut` access does not compile. Change it
+/// through [`StateChangeRequest`] (validated, fires events) or [`ResetState`]; a raw
+/// `insert` of the component still compiles and bypasses both the rules and the events.
 ///
 /// ```compile_fail
 /// # use bevy::prelude::*;
@@ -629,7 +630,7 @@ pub enum RuleType {
     /// applies. If `call_rules: false`, all transitions are allowed.
     All,
 
-    /// Deny all transitions (immutable state).
+    /// Deny all transitions (frozen state).
     ///
     /// The `transitions` set is ignored. All transitions are hard-denied.
     /// `FSMTransition` validation is never reached.
@@ -813,7 +814,7 @@ where
         }
     }
 
-    /// Deny all transitions (immutable state).
+    /// Deny all transitions (frozen state).
     #[must_use]
     pub fn deny_all() -> Self {
         Self {

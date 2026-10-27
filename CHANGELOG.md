@@ -13,8 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **BREAKING**: The FSM enum must be an immutable component
   (`#[component(immutable)]`); `#[derive(FSMState)]` enforces this at compile
-  time. `&mut` access to the state no longer compiles, so it only changes through
-  `StateChangeRequest` or `ResetState`.
+  time. `&mut` access to the state no longer compiles; change it through
+  `StateChangeRequest` or `ResetState`. A raw `insert` of the component still
+  compiles and bypasses the rules and events.
 - **BREAKING**: `StateChangeRequest` is a `Command` instead of an event: queue it
   with `commands.queue(StateChangeRequest { entity, next })`. The
   `apply_state_request` observer is gone. `StateChangeRequest::try_apply(world)`
