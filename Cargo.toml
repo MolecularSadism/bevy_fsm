@@ -11,6 +11,7 @@ authors = ["Dr. Florian Mulks <ffmulks@users.noreply.github.com>"]
 
 [workspace.dependencies]
 bevy = { version = "0.20", default-features = false }
+log = { version = "0.4", default-features = false }
 syn = { version = "2.0.116", features = ["full", "visit"] }
 quote = "1.0.44"
 proc-macro2 = "1.0.106"
@@ -35,4 +36,5 @@ all-features = true
 
 [dependencies]
 bevy.workspace = true
+log.workspace = true
 bevy_fsm_macros = { version = "0.7.0", path = "bevy_fsm_macros" }

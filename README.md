@@ -148,7 +148,11 @@ change it:
   writes the new state, then fires `Enter`. Queue it from any system with
   `commands.queue(...)`; rejected requests are dropped. In exclusive code,
   `request.try_apply(world)` returns `Ok(previous)` or a `TransitionError`
-  (`NoState`, `Unchanged`, `Denied`).
+  (`NoState`, `Unchanged`, `Denied`, `Exiting`).
+  Request a follow-up transition from an `Enter` observer: `Enter` → logic → next
+  state chains as expected. A request for the same entity and FSM made from an
+  `Exit` observer is rejected with a warning, since that entity is already
+  mid-transition.
 - **`ResetState { entity, state }`** - Overwrites the state without validation and
   without events, for re-initialising pooled or recycled entities.
 

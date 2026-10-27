@@ -28,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   origin (`from`, `None` for the initial state).
 - **BREAKING**: Removed `Transition<F, T>`. Observe `Exit` of the source variant
   and check `to` instead.
-- **BREAKING**: `FSMState` requires `Hash` and can no longer be implemented by
+- **BREAKING**: `FSMState` requires `Hash` and `Debug` and can no longer be implemented by
   hand (use the derive); its `trigger_*_variant` and `can_transition*` methods
   were removed (`FSMTransition` keeps the rules). The derive rejects generic enums.
 - Each transition fires one `Exit` and one `Enter` event, routed by the variant
@@ -38,6 +38,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of 22,867 functions and rebuilds in 0.6 s instead of 2.5 s.
 - Variant markers are zero-sized components that cannot be constructed outside
   their generated module, with the enum's visibility.
+
+### Fixed
+
+- A transition requested by an `Exit` observer for the entity it is leaving
+  recursed until the stack overflowed (also in 0.6). It is now rejected with
+  `TransitionError::Exiting` and a warning. Transitions requested from `Enter`
+  observers, including the initial `Enter`, chain as before.
 
 ### Added
 

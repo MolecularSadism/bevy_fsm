@@ -138,6 +138,7 @@ pub fn derive_fsm_transition(input: TokenStream) -> TokenStream {
 /// # Requirements
 ///
 /// - The enum must only have unit variants and no generic parameters
+/// - The enum must implement `Copy`, `Eq`, `Hash` and `Debug`
 /// - The enum must be an immutable component (`#[component(immutable)]`), so its
 ///   value can only change through `StateChangeRequest`
 ///

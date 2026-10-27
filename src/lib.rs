@@ -156,6 +156,7 @@ use bevy::{
     ecs::{
         component::{ComponentId, Immutable},
         event::{EntityComponentsTrigger, EventPattern},
+        world::WorldId,
     },
     platform::collections::{HashMap, HashSet},
     reflect::GetTypeRegistration,
@@ -381,6 +382,7 @@ pub trait FSMState:
     + Copy
     + Eq
     + core::hash::Hash
+    + core::fmt::Debug
     + Send
     + Sync
     + 'static
@@ -399,6 +401,9 @@ pub enum TransitionError {
     Unchanged,
     /// The transition rules or the entity's [`FSMOverride`] forbid it.
     Denied,
+    /// Requested by an [`Exit`] observer while the entity is leaving a state of this
+    /// FSM. Request follow-up transitions from an [`Enter`] observer instead.
+    Exiting,
 }
 
 impl core::fmt::Display for TransitionError {
@@ -407,6 +412,7 @@ impl core::fmt::Display for TransitionError {
             Self::NoState => "entity has no state of this FSM",
             Self::Unchanged => "entity is already in the requested state",
             Self::Denied => "transition is not allowed",
+            Self::Exiting => "transition requested while the entity is exiting a state",
         })
     }
 }
@@ -450,15 +456,26 @@ impl<S: FSMState> StateChangeRequest<S> {
     /// Applies the request immediately, returning the state that was left.
     ///
     /// Commands queued by [`Exit`] observers apply before the new state is written,
-    /// and everything queued along the way is flushed before this returns.
+    /// and everything queued along the way is flushed before this returns. A request
+    /// for the same entity and FSM queued by an [`Exit`] observer is rejected with a
+    /// warning; [`Enter`] observers may request the next transition.
     ///
     /// # Errors
     ///
     /// Returns a [`TransitionError`] and changes nothing when the entity has no state,
-    /// is already in `next`, or the transition is not allowed.
+    /// is exiting a state, is already in `next`, or the transition is not allowed.
     pub fn try_apply(self, world: &mut World) -> Result<S, TransitionError> {
         let Self { entity, next } = self;
         let current = *world.get::<S>(entity).ok_or(TransitionError::NoState)?;
+        let exit_scope = (world.id(), entity, TypeId::of::<S>());
+        if is_exiting(exit_scope) {
+            log::warn!(
+                "{entity}: rejected {} transition to {next:?} requested while exiting \
+                 {current:?}; request it from an Enter observer instead",
+                core::any::type_name::<S>()
+            );
+            return Err(TransitionError::Exiting);
+        }
         if current == next {
             return Err(TransitionError::Unchanged);
         }
@@ -467,6 +484,7 @@ impl<S: FSMState> StateChangeRequest<S> {
         }
 
         let exit_key = current.variant_key(world);
+        let exit_guard = ExitGuard::enter(exit_scope);
         world.trigger_with(
             ExitEvent {
                 entity,
@@ -476,6 +494,7 @@ impl<S: FSMState> StateChangeRequest<S> {
             keyed_trigger(&[exit_key]),
         );
         world.flush();
+        drop(exit_guard);
 
         // An Exit observer may have despawned the entity or removed its state.
         let Ok(mut entity_mut) = world.get_entity_mut(entity) else {
@@ -524,6 +543,40 @@ impl<S: FSMState> Command for ResetState<S> {
         {
             entity_mut.insert(self.state);
         }
+    }
+}
+
+/// World, entity and FSM type of a transition whose [`Exit`] observers are running.
+type ExitScope = (WorldId, Entity, TypeId);
+
+std::thread_local! {
+    // Commands apply on one thread with exclusive world access, so a thread-local
+    // list sees every Exit phase a nested request can be issued from.
+    static EXITING: core::cell::RefCell<Vec<ExitScope>> =
+        const { core::cell::RefCell::new(Vec::new()) };
+}
+
+fn is_exiting(scope: ExitScope) -> bool {
+    EXITING.with_borrow(|exiting| exiting.contains(&scope))
+}
+
+/// Marks an Exit phase as running until dropped, including on early return or panic.
+struct ExitGuard(ExitScope);
+
+impl ExitGuard {
+    fn enter(scope: ExitScope) -> Self {
+        EXITING.with_borrow_mut(|exiting| exiting.push(scope));
+        Self(scope)
+    }
+}
+
+impl Drop for ExitGuard {
+    fn drop(&mut self) {
+        EXITING.with_borrow_mut(|exiting| {
+            if let Some(index) = exiting.iter().rposition(|scope| *scope == self.0) {
+                exiting.swap_remove(index);
+            }
+        });
     }
 }
 
@@ -1264,6 +1317,101 @@ mod tests {
 
         assert!(app.world().get::<TestState>(e).is_none());
         assert!(app.world().resource::<EventLog>().enters.is_empty());
+    }
+
+    #[test]
+    fn exit_observer_requests_are_rejected() {
+        #[derive(Resource, Default)]
+        struct Outcome(Option<Result<TestState, TransitionError>>);
+
+        let mut app = test_app();
+        app.init_resource::<Outcome>();
+        app.add_observer(on_enter);
+        app.add_observer(|trigger: On<Exit<test_state::A>>, mut commands: Commands| {
+            let entity = trigger.entity;
+            commands.queue(move |world: &mut World| {
+                let outcome = StateChangeRequest {
+                    entity,
+                    next: TestState::C,
+                }
+                .try_apply(world);
+                world.resource_mut::<Outcome>().0 = Some(outcome);
+            });
+        });
+
+        let e = app.world_mut().spawn(TestState::A).id();
+        request(&mut app, e, TestState::B);
+
+        assert_eq!(state(&app, e), TestState::B);
+        assert_eq!(
+            app.world().resource::<Outcome>().0,
+            Some(Err(TransitionError::Exiting))
+        );
+        assert_eq!(
+            app.world().resource::<EventLog>().enters,
+            vec![(TestState::B, Some(TestState::A))]
+        );
+    }
+
+    #[test]
+    fn exit_observer_may_request_other_entities_and_fsms() {
+        let mut app = test_app();
+        let other = app.world_mut().spawn(TestState::A).id();
+        app.add_observer(
+            move |trigger: On<Exit<test_state::B>>, mut commands: Commands| {
+                commands.queue(StateChangeRequest {
+                    entity: other,
+                    next: TestState::B,
+                });
+                commands.queue(StateChangeRequest {
+                    entity: trigger.entity,
+                    next: SecondFSM::Y,
+                });
+            },
+        );
+
+        let e = app.world_mut().spawn((TestState::B, SecondFSM::X)).id();
+        request(&mut app, e, TestState::C);
+
+        assert_eq!(state(&app, e), TestState::C);
+        assert_eq!(state(&app, other), TestState::B);
+        assert_eq!(*app.world().get::<SecondFSM>(e).unwrap(), SecondFSM::Y);
+    }
+
+    #[test]
+    fn enter_observers_chain_transitions() {
+        let mut app = test_app();
+        app.add_observer(on_fsm_added::<TestState>);
+        app.add_observer(on_enter);
+        app.add_observer(
+            |trigger: On<Enter<test_state::A>>, mut commands: Commands| {
+                commands.queue(StateChangeRequest {
+                    entity: trigger.entity,
+                    next: TestState::B,
+                });
+            },
+        );
+        app.add_observer(
+            |trigger: On<Enter<test_state::B>>, mut commands: Commands| {
+                commands.queue(StateChangeRequest {
+                    entity: trigger.entity,
+                    next: TestState::C,
+                });
+            },
+        );
+
+        let e = app.world_mut().spawn(TestState::A).id();
+        app.update();
+
+        assert_eq!(state(&app, e), TestState::C);
+        assert_eq!(
+            app.world().resource::<EventLog>().enters,
+            vec![
+                (TestState::A, None),
+                (TestState::B, Some(TestState::A)),
+                (TestState::C, Some(TestState::B)),
+            ]
+        );
     }
 
     #[test]
