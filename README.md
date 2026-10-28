@@ -24,7 +24,7 @@ Observer-driven finite state machine framework for Bevy ECS.
 - **Enum-based states**: Keep your states as simple enum variants
 - **Observer-driven**: React to state changes via Bevy observers
 - **Variant-specific observers**: `On<Enter<life_fsm::Dying>>` runs only when `Dying` is entered
-- **Enforced rules**: The state is an immutable component; it only changes through a validated request
+- **Enforced rules**: The state is an immutable component, so `&mut` access does not compile; transitions go through a validated request
 - **Flexible validation**: Per-entity and per-type transition rules
 - **Clean API**: FSMPlugin for automatic setup
 - **Initial state support**: Automatic enter events when FSM components are added
@@ -141,16 +141,23 @@ fn on_tile_exit(exit: On<Exit<block_fsm::Tile>>, /* ... */) { }
 
 ### Changing State
 
-The state component is immutable, so `&mut` access does not compile. Two commands
-change it:
+The state component is immutable, so `&mut` access does not compile. Change it
+with one of two commands:
 
 - **`StateChangeRequest { entity, next }`** - Validates the transition, fires `Exit`,
   writes the new state, then fires `Enter`. Queue it from any system with
   `commands.queue(...)`; rejected requests are dropped. In exclusive code,
   `request.try_apply(world)` returns `Ok(previous)` or a `TransitionError`
-  (`NoState`, `Unchanged`, `Denied`).
+  (`NoState`, `Unchanged`, `Denied`, `Exiting`).
+  Request a follow-up transition from an `Enter` observer: `Enter` → logic → next
+  state chains as expected. A request for the same entity and FSM made from an
+  `Exit` observer is rejected with a warning, since that entity is already
+  mid-transition.
 - **`ResetState { entity, state }`** - Overwrites the state without validation and
   without events, for re-initialising pooled or recycled entities.
+
+Inserting the component directly (`entity.insert(BlockFSM::Loose)`) still compiles
+and bypasses the transition rules and events; nothing detects it.
 
 ```rust
 use bevy_fsm::{ResetState, StateChangeRequest};
@@ -211,7 +218,7 @@ app.world_mut().add_observer(on_enter_loose);
 Key `Enter`/`Exit` by the FSM itself to observe every variant:
 
 ```rust
-fn on_any_enter(trigger: On<Enter<BlockFSM>>, mut commands: Commands) {
+fn on_any_enter(trigger: On<Enter<BlockFSM>>) {
     match trigger.state {
         BlockFSM::Tile => { /* handle tile */ },
         BlockFSM::Loose => { /* handle loose */ },
@@ -265,7 +272,7 @@ commands.entity(injured_npc).insert((
 - **`whitelist([...])`**: Only listed transitions pass immediately
 - **`blacklist([...])`**: Listed transitions denied immediately
 - **`allow_all()`**: All transitions pass (bypass FSMTransition unless `with_rules()`)
-- **`deny_all()`**: All transitions denied (immutable state)
+- **`deny_all()`**: All transitions denied (frozen state)
 
 ### Context-Aware Validation
 
